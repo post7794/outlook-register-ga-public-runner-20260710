@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       node_slots_json:
-        description: "JSON array of private proxy-pool slots to run, for example [3,4,5,10,20]"
+        description: "JSON matrix labels; in proxy mode they select pool slots, in GA-own-IP mode each label starts a fresh runner"
         required: true
         default: "[1,2,3,4,5]"
+      network_mode:
+        description: "Use the fresh GA runner egress directly or route through the configured proxy pool"
+        required: true
+        default: "ga_own_ip"
+        type: choice
+        options:
+          - ga_own_ip
+          - proxy_pool
       variant:
         description: "Probe variant to run on each fresh GA egress IP"
         required: true
@@ -194,7 +202,7 @@ jobs:
           chmod +x run_xvfb_*.sh
 
       - name: Start subscription proxy
-        if: ${{ env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '' }}
+        if: ${{ inputs.network_mode == 'proxy_pool' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
         shell: bash
         env:
           PROXY_SUBSCRIPTION_URL: ${{ env.CTF_PROXY_SUBSCRIPTION_URL }}
@@ -270,6 +278,7 @@ jobs:
           data = {
               "attempt": ${{ matrix.attempt }},
               "variant": "${{ inputs.variant }}",
+              "network_mode": "${{ inputs.network_mode }}",
               "runner": "${{ inputs.runner }}",
               "runner_os": "${{ runner.os }}",
               "runner_arch": "${{ runner.arch }}",
@@ -318,6 +327,7 @@ jobs:
           mkdir -p Results/diagnostics
           private_console="Results/diagnostics/public_runner_private_console.log"
           echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
+          echo "NETWORK_MODE=${{ inputs.network_mode }}"
           echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
           echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
           variant="${{ inputs.variant }}"
