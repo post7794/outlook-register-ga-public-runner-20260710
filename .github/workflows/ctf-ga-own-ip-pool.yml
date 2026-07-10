@@ -501,12 +501,12 @@ jobs:
           elif skipped:
               category = "ip_skipped"
               reason = "egress_denylist"
+          elif accepted_result0 and (post_success_rechallenge or explicit_riskblock):
+              category = "technical_pass_ip_blocked"
+              reason = "collector_result0_then_postrisk_block_or_rechallenge"
           elif explicit_riskblock:
               category = "ip_riskblock"
               reason = "explicit_riskblock"
-          elif accepted_result0 and post_success_rechallenge:
-              category = "postrisk_rechallenge_after_result0"
-              reason = "collector_result0_then_post_success_rechallenge"
           else:
               category = "technical_failure"
               if not row:
@@ -649,10 +649,9 @@ jobs:
           missing = max(0, expected - len(rows))
           technical = counts["technical_failure"] + counts["missing"] + missing
           strict = counts["strict_success"]
-          checkpoint = strict + counts["ip_limited_rechallenge"]
-          postrisk = counts["postrisk_rechallenge_after_result0"]
-          checkpoint = strict + postrisk
-          ip_limited = counts["ip_riskblock"] + counts["ip_skipped"]
+          technical_pass_ip_blocked = counts["technical_pass_ip_blocked"]
+          checkpoint = strict + technical_pass_ip_blocked
+          ip_limited = counts["ip_riskblock"] + counts["ip_skipped"] + technical_pass_ip_blocked
 
           if technical:
               conclusion = "technical_failure"
@@ -661,7 +660,7 @@ jobs:
               # At least one slot proved the non-IP path through collector
               # result|0 (or strict CreateAccount), and every other slot was
               # either equally successful or stopped by an explicit IP gate.
-              conclusion = "strict_success" if strict else "non_ip_checkpoint_passed_postrisk_limited"
+              conclusion = "strict_success" if strict else "technical_pass_ip_blocked"
               goal_met = True
           else:
               conclusion = "inconclusive_ip_only"
@@ -672,7 +671,7 @@ jobs:
               "received_verdicts": len(rows),
               "strict_success": strict,
               "ip_limited": ip_limited,
-              "postrisk_rechallenge_after_result0": postrisk,
+              "technical_pass_ip_blocked": technical_pass_ip_blocked,
               "technical_failure": technical,
               "decisive_non_ip_checkpoint": checkpoint,
               "goal_met": goal_met,
