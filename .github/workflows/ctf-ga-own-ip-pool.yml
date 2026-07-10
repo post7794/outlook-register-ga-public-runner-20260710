@@ -23,6 +23,7 @@ on:
         options:
           - default
           - semiprotocol_5s_stable
+          - semiprotocol_5s_historical_firstpass
           - paired_5s_then_thin
           - paired_thin_then_5s
           - natural_legacy
@@ -360,6 +361,8 @@ jobs:
             cmd=()
             if [ "$variant" = "semiprotocol_5s_stable" ]; then
               cmd=(./run_xvfb_semiprotocol_5s_1920.sh)
+            elif [ "$variant" = "semiprotocol_5s_historical_firstpass" ]; then
+              cmd=(./run_xvfb_semiprotocol_5s_historical_firstpass_1920.sh)
             elif [ "$variant" = "ui_natural" ]; then
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
