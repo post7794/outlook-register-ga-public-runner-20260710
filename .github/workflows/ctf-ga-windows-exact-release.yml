@@ -33,13 +33,13 @@ jobs:
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       # Pin the reviewed private-source snapshot. Do not replace this with a
       # mutable branch variable: otherwise OS and source change together.
-      PRIVATE_SOURCE_SHA: de2c92d666400f396959f4491d06426b4092b31a
+      PRIVATE_SOURCE_SHA: d1a9f550fb629ec2f4ea66fb8614b916bf478d13
     steps:
       - name: Checkout pinned private source
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: de2c92d666400f396959f4491d06426b4092b31a
+          ref: d1a9f550fb629ec2f4ea66fb8614b916bf478d13
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -224,13 +224,47 @@ jobs:
           }
           $row = Get-Content $classificationPath -Raw | ConvertFrom-Json
           $strictSuccess = ($row.verdict -eq "create_account_200" -and $row.create_200 -eq $true)
-          $technicalPass = ($row.technical_pass -eq $true)
-          $ipOnly = ($row.outcome_class -eq "technical_pass_ip_limited" -or $row.outcome_class -eq "ip_block_pre_proof")
-          $acceptable = ($strictSuccess -or $technicalPass -or $ipOnly)
+          $proofAccepted = ($row.proof_accepted -eq $true)
+          $explicitRiskBlock = ($row.riskblock -eq $true)
+          $postProofRechallenge = (
+            $proofAccepted -and
+            -not $strictSuccess -and
+            -not $explicitRiskBlock -and
+            (
+              $row.risk_verify_second_challenge -eq $true -or
+              $row.risk_verify_post_success_challenge -eq $true -or
+              $row.live_timeout -eq $true -or
+              $row.verdict -eq "result0_rechallenge"
+            )
+          )
+
+          # Normalize old private-source classifier output here.  A collector
+          # result|0 followed by a timeout/rechallenge proves the protocol
+          # checkpoint, but it is not evidence of an IP block.  Only an
+          # explicit riskBlock is assigned an IP category.
+          if ($strictSuccess) {
+            $outcomeClass = "strict_success"
+          } elseif ($explicitRiskBlock -and $proofAccepted) {
+            $outcomeClass = "ip_riskblock_after_proof"
+          } elseif ($explicitRiskBlock) {
+            $outcomeClass = "ip_block_pre_proof"
+          } elseif ($postProofRechallenge) {
+            $outcomeClass = "post_proof_rechallenge"
+          } elseif ($proofAccepted) {
+            $outcomeClass = "proof_accepted_no_account"
+          } else {
+            $outcomeClass = "technical_failure"
+          }
+
+          $technicalPass = ($strictSuccess -or $proofAccepted)
+          $ipOnly = ($outcomeClass -eq "ip_riskblock_after_proof" -or $outcomeClass -eq "ip_block_pre_proof")
+          # A proof checkpoint without CreateAccount is still an unresolved
+          # non-IP failure unless the server explicitly returned riskBlock.
+          $acceptable = ($strictSuccess -or $ipOnly)
           "strict_success=$($strictSuccess.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "technical_pass=$($technicalPass.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "acceptable=$($acceptable.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "outcome_class=$($row.outcome_class)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "outcome_class=$outcomeClass" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "verdict=$($row.verdict)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           "## Windows exact-release attempt ${{ matrix.attempt }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -245,11 +279,13 @@ jobs:
             human_success = $row.human_success
             captcha_close_minus1 = $row.captcha_close_minus1
             risk_verify_second_challenge = $row.risk_verify_second_challenge
+            risk_verify_post_success_challenge = $row.risk_verify_post_success_challenge
             live_timeout = $row.live_timeout
-            proof_accepted = $row.proof_accepted
-            technical_pass = $row.technical_pass
-            ip_limited_after_proof = $row.ip_limited_after_proof
-            outcome_class = $row.outcome_class
+            proof_accepted = $proofAccepted
+            technical_pass = $technicalPass
+            explicit_riskblock = $explicitRiskBlock
+            post_proof_rechallenge = $postProofRechallenge
+            outcome_class = $outcomeClass
           }
           '```json' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $safe | ConvertTo-Json | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -290,11 +326,11 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Enforce no non-IP technical failure
+      - name: Enforce no technical failure
         if: always()
         shell: pwsh
         run: |
           if ("${{ steps.verdict.outputs.acceptable }}" -ne "true") {
-            throw "Non-IP technical failure: outcome=${{ steps.verdict.outputs.outcome_class }} verdict=${{ steps.verdict.outputs.verdict }} probe_exit_code=${{ steps.live.outputs.exit_code }}"
+            throw "Technical failure: outcome=${{ steps.verdict.outputs.outcome_class }} verdict=${{ steps.verdict.outputs.verdict }} probe_exit_code=${{ steps.live.outputs.exit_code }}"
           }
           Write-Host "Accepted outcome=${{ steps.verdict.outputs.outcome_class }} strict=${{ steps.verdict.outputs.strict_success }} technical_pass=${{ steps.verdict.outputs.technical_pass }}"

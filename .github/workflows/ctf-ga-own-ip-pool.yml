@@ -501,16 +501,24 @@ jobs:
           elif skipped:
               category = "ip_skipped"
               reason = "egress_denylist"
-          elif accepted_result0 and (post_success_rechallenge or explicit_riskblock):
+          elif accepted_result0 and explicit_riskblock:
               category = "technical_pass_ip_blocked"
-              reason = "collector_result0_then_postrisk_block_or_rechallenge"
+              reason = "collector_result0_then_explicit_riskblock"
           elif explicit_riskblock:
               category = "ip_riskblock"
               reason = "explicit_riskblock"
+          elif accepted_result0 and post_success_rechallenge:
+              # A repeated challenge is not evidence of an IP block. Keep it
+              # visible as a post-proof technical outcome instead of turning a
+              # collector result|0 into an inferred IP diagnosis.
+              category = "post_proof_rechallenge"
+              reason = "collector_result0_then_rechallenge_without_riskblock"
           else:
               category = "technical_failure"
               if not row:
                   reason = "missing_classification"
+              elif accepted_result0 and timed_out:
+                  reason = "collector_result0_then_live_timeout_without_riskblock"
               elif timed_out:
                   reason = "probe_timeout_before_accepted_checkpoint"
               else:
@@ -580,29 +588,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          latest=$(ls -t Results/network/*.jsonl 2>/dev/null | head -n1 || true)
-          if [ -z "$latest" ]; then
-            echo "technical failure: no network trace"
+          verdict=$(ls -t public-safe-verdict/verdict-*.json 2>/dev/null | head -n1 || true)
+          if [ -z "$verdict" ]; then
+            echo "technical failure: no public-safe verdict"
             exit 1
           fi
-          . .venv/bin/activate
-          python classify_protocol_run.py "$latest" > /tmp/exact_release_verdict.json
-          python - <<'PY'
+          VERDICT_PATH="$verdict" python - <<'PY'
           import json
+          import os
           from pathlib import Path
-          row = json.loads(Path('/tmp/exact_release_verdict.json').read_text(encoding='utf-8'))
-          outcome = str(row.get('outcome_class') or '')
-          acceptable = outcome in {
+          row = json.loads(Path(os.environ['VERDICT_PATH']).read_text(encoding='utf-8'))
+          category = str(row.get('category') or '')
+          acceptable = category in {
               'strict_success',
-              'technical_pass_ip_limited',
-              'ip_block_pre_proof',
+              'technical_pass_ip_blocked',
+              'ip_riskblock',
+              'ip_skipped',
           }
           print(json.dumps({
-              'outcome_class': outcome,
+              'category': category,
+              'reason': row.get('reason'),
               'strict_success': row.get('strict_success'),
-              'proof_accepted': row.get('proof_accepted'),
-              'technical_pass': row.get('technical_pass'),
-              'ip_limited_after_proof': row.get('ip_limited_after_proof'),
+              'accepted_result0': row.get('accepted_result0'),
+              'explicit_riskblock': row.get('explicit_riskblock'),
               'acceptable_for_non_ip_goal': acceptable,
           }, ensure_ascii=False))
           raise SystemExit(0 if acceptable else 1)
@@ -647,7 +655,13 @@ jobs:
 
           counts = Counter(str(row.get("category") or "missing") for row in rows)
           missing = max(0, expected - len(rows))
-          technical = counts["technical_failure"] + counts["missing"] + missing
+          post_proof_rechallenge = counts["post_proof_rechallenge"]
+          technical = (
+              counts["technical_failure"]
+              + post_proof_rechallenge
+              + counts["missing"]
+              + missing
+          )
           strict = counts["strict_success"]
           technical_pass_ip_blocked = counts["technical_pass_ip_blocked"]
           checkpoint = strict + technical_pass_ip_blocked
@@ -672,6 +686,7 @@ jobs:
               "strict_success": strict,
               "ip_limited": ip_limited,
               "technical_pass_ip_blocked": technical_pass_ip_blocked,
+              "post_proof_rechallenge": post_proof_rechallenge,
               "technical_failure": technical,
               "decisive_non_ip_checkpoint": checkpoint,
               "goal_met": goal_met,
@@ -686,7 +701,7 @@ jobs:
                   fh.write("```json\n")
                   fh.write(json.dumps(summary, ensure_ascii=False, indent=2))
                   fh.write("\n```\n")
-                  fh.write("\ntechnical_pass_ip_blocked means collector result|0 was reached before a post-risk block/rechallenge. This is the operational non-IP checkpoint, not causal proof that IP alone caused the later rejection; GA-only evidence cannot separate IP from runner metadata.\n")
+                  fh.write("\ntechnical_pass_ip_blocked requires an explicit riskBlock after collector result|0. A rechallenge or live timeout without explicit riskBlock is not classified as an IP problem.\n")
 
           # Do not report a green workflow when every IP was blocked before a
           # decisive checkpoint, or when any non-IP technical failure remains.
