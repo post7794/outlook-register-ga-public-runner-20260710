@@ -686,7 +686,7 @@ jobs:
                   fh.write("```json\n")
                   fh.write(json.dumps(summary, ensure_ascii=False, indent=2))
                   fh.write("\n```\n")
-                  fh.write("\nIP-limited only means explicit riskblock/denylist. A post-risk rechallenge after result|0 is reported separately because GA-only evidence cannot prove whether IP or Linux/Xvfb metadata caused it.\n")
+                  fh.write("\ntechnical_pass_ip_blocked means collector result|0 was reached before a post-risk block/rechallenge. This is the operational non-IP checkpoint, not causal proof that IP alone caused the later rejection; GA-only evidence cannot separate IP from runner metadata.\n")
 
           # Do not report a green workflow when every IP was blocked before a
           # decisive checkpoint, or when any non-IP technical failure remains.
