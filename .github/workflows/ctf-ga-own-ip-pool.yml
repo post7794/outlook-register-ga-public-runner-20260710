@@ -24,6 +24,7 @@ on:
           - default
           - semiprotocol_5s_stable
           - semiprotocol_5s_historical_firstpass
+          - semiprotocol_5s_histfp_no_inject_knp
           - paired_5s_then_thin
           - paired_thin_then_5s
           - natural_legacy
@@ -363,6 +364,8 @@ jobs:
               cmd=(./run_xvfb_semiprotocol_5s_1920.sh)
             elif [ "$variant" = "semiprotocol_5s_historical_firstpass" ]; then
               cmd=(./run_xvfb_semiprotocol_5s_historical_firstpass_1920.sh)
+            elif [ "$variant" = "semiprotocol_5s_histfp_no_inject_knp" ]; then
+              cmd=(./run_xvfb_semiprotocol_5s_histfp_no_inject_knp_1920.sh)
             elif [ "$variant" = "ui_natural" ]; then
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
