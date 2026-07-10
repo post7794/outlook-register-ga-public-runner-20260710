@@ -33,13 +33,13 @@ jobs:
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       # Pin the reviewed private-source snapshot. Do not replace this with a
       # mutable branch variable: otherwise OS and source change together.
-      PRIVATE_SOURCE_SHA: d1a9f550fb629ec2f4ea66fb8614b916bf478d13
+      PRIVATE_SOURCE_SHA: d5615affcd7620367ed991fa20ceedd6344d3197
     steps:
       - name: Checkout pinned private source
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: d1a9f550fb629ec2f4ea66fb8614b916bf478d13
+          ref: d5615affcd7620367ed991fa20ceedd6344d3197
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -116,6 +116,8 @@ jobs:
           OUTLOOK_SIGNUP_CHECK_AVAILABLE_PREFETCH_MODE: "off"
           OUTLOOK_SIGNUP_SUBMIT_MODE: "dom_fast"
           OUTLOOK_SIGNUP_NAME_SUBMIT_MODE: "native"
+          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_SOLUTION_FALLBACKS: "0"
+          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_CHALLENGE_RETRIES: "3"
         run: |
           $ErrorActionPreference = "Continue"
           New-Item -ItemType Directory -Force -Path `
