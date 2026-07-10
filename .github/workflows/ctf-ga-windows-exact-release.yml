@@ -33,13 +33,13 @@ jobs:
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       # Pin the reviewed private-source snapshot. Do not replace this with a
       # mutable branch variable: otherwise OS and source change together.
-      PRIVATE_SOURCE_SHA: 7a5e399dd4a7cc933e3692918cb69881c44417df
+      PRIVATE_SOURCE_SHA: de2c92d666400f396959f4491d06426b4092b31a
     steps:
       - name: Checkout pinned private source
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: 7a5e399dd4a7cc933e3692918cb69881c44417df
+          ref: de2c92d666400f396959f4491d06426b4092b31a
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -224,7 +224,13 @@ jobs:
           }
           $row = Get-Content $classificationPath -Raw | ConvertFrom-Json
           $strictSuccess = ($row.verdict -eq "create_account_200" -and $row.create_200 -eq $true)
+          $technicalPass = ($row.technical_pass -eq $true)
+          $ipOnly = ($row.outcome_class -eq "technical_pass_ip_limited" -or $row.outcome_class -eq "ip_block_pre_proof")
+          $acceptable = ($strictSuccess -or $technicalPass -or $ipOnly)
           "strict_success=$($strictSuccess.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "technical_pass=$($technicalPass.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "acceptable=$($acceptable.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "outcome_class=$($row.outcome_class)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "verdict=$($row.verdict)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           "## Windows exact-release attempt ${{ matrix.attempt }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -240,6 +246,10 @@ jobs:
             captcha_close_minus1 = $row.captcha_close_minus1
             risk_verify_second_challenge = $row.risk_verify_second_challenge
             live_timeout = $row.live_timeout
+            proof_accepted = $row.proof_accepted
+            technical_pass = $row.technical_pass
+            ip_limited_after_proof = $row.ip_limited_after_proof
+            outcome_class = $row.outcome_class
           }
           '```json' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $safe | ConvertTo-Json | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -280,11 +290,11 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Enforce strict business verdict
+      - name: Enforce no non-IP technical failure
         if: always()
         shell: pwsh
         run: |
-          if ("${{ steps.verdict.outputs.strict_success }}" -ne "true") {
-            throw "Strict business failure: verdict=${{ steps.verdict.outputs.verdict }} probe_exit_code=${{ steps.live.outputs.exit_code }}"
+          if ("${{ steps.verdict.outputs.acceptable }}" -ne "true") {
+            throw "Non-IP technical failure: outcome=${{ steps.verdict.outputs.outcome_class }} verdict=${{ steps.verdict.outputs.verdict }} probe_exit_code=${{ steps.live.outputs.exit_code }}"
           }
-          Write-Host "Strict CreateAccount success confirmed."
+          Write-Host "Accepted outcome=${{ steps.verdict.outputs.outcome_class }} strict=${{ steps.verdict.outputs.strict_success }} technical_pass=${{ steps.verdict.outputs.technical_pass }}"

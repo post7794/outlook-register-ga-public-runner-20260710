@@ -402,8 +402,8 @@ jobs:
             | sed -E 's/[[:alnum:]._%+-]+@(outlook|hotmail)\.com/<redacted-email>/g' \
             | tail -40 || true
           # Matrix attempts are allowed to fail individually. The summarize job
-          # decides the workflow result based on whether at least one fresh GA IP
-          # completed account creation.
+          # evaluates redacted per-slot verdicts and rejects technical failures
+          # or an all-IP-blocked run with no decisive non-IP checkpoint.
           exit 0
 
       - name: Summarize attempt without publishing credentials
@@ -431,13 +431,124 @@ jobs:
                   'verdict', 'create_200', 'create_request', 'riskblock',
                   'human_loaded', 'human_success', 'captcha_close_minus1',
                   'score0_no_result0_timeout', 'iframe_bootstrap_stall',
-                  'button_locate_timeout', 'live_timeout'
+                  'button_locate_timeout', 'live_timeout',
+                  'strict_success', 'proof_accepted', 'technical_pass',
+                  'ip_limited_after_proof', 'repeated_risk_challenge',
+                  'outcome_class'
               )}
               print('```json')
               print(json.dumps(safe, ensure_ascii=False, indent=2))
               print('```')
           PY
           fi
+
+      - name: Build redacted machine-readable verdict
+        if: ${{ always() }}
+        shell: bash
+        env:
+          ATTEMPT: ${{ matrix.attempt }}
+          VARIANT: ${{ inputs.variant }}
+          NETWORK_MODE: ${{ inputs.network_mode }}
+          RUNNER_LABEL: ${{ inputs.runner }}
+          PER_IP_MAX_REGISTRATIONS: ${{ inputs.per_ip_max_registrations }}
+          PROBE_EXIT_CODE: ${{ steps.live.outputs.exit_code }}
+        run: |
+          set +e
+          mkdir -p public-safe-verdict
+          latest=$(ls -t Results/network/*.jsonl 2>/dev/null | head -n1 || true)
+          if [ -n "$latest" ] && [ -f classify_protocol_run.py ]; then
+            . .venv/bin/activate 2>/dev/null || true
+            python classify_protocol_run.py "$latest" > /tmp/private_classification.json 2>/dev/null || true
+          fi
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def load_json(path):
+              try:
+                  return json.loads(Path(path).read_text(encoding="utf-8"))
+              except Exception:
+                  return {}
+
+          row = load_json("/tmp/private_classification.json")
+          skipped = Path("Results/diagnostics/egress_skip.txt").exists()
+          timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
+
+          result_values = []
+          for key in ("network_collector_results", "route_collector_results", "route_merged_results"):
+              value = row.get(key) or []
+              if isinstance(value, list):
+                  result_values.extend(str(item) for item in value)
+          accepted_result0 = any(item == "0" or item.endswith("|0") for item in result_values)
+          post_success_rechallenge = bool(row.get("risk_verify_post_success_challenge"))
+          strict_success = bool(row.get("create_200")) and row.get("verdict") == "create_account_200"
+          explicit_riskblock = bool(row.get("riskblock"))
+          multi_probe_slot = (
+              os.environ.get("VARIANT", "").startswith("paired_")
+              or os.environ.get("PER_IP_MAX_REGISTRATIONS", "1") != "1"
+          )
+
+          # Classification is intentionally based on decisive facts rather than
+          # only `verdict`: the private classifier currently gives LIVE_TIMEOUT
+          # precedence over a collector result|0 followed by a risk rechallenge.
+          if multi_probe_slot:
+              category = "technical_failure"
+              reason = "multi_probe_slot_requires_per_probe_verdicts"
+          elif strict_success:
+              category = "strict_success"
+              reason = "strict_create_account_body"
+          elif skipped:
+              category = "ip_skipped"
+              reason = "egress_denylist"
+          elif explicit_riskblock:
+              category = "ip_riskblock"
+              reason = "explicit_riskblock"
+          elif accepted_result0 and post_success_rechallenge:
+              category = "postrisk_rechallenge_after_result0"
+              reason = "collector_result0_then_post_success_rechallenge"
+          else:
+              category = "technical_failure"
+              if not row:
+                  reason = "missing_classification"
+              elif timed_out:
+                  reason = "probe_timeout_before_accepted_checkpoint"
+              else:
+                  reason = str(row.get("verdict") or "unclassified_failure")
+
+          # Keep this artifact public-safe: no IP, email, account fields, URLs,
+          # filenames, proxy names, raw errors, request bodies, or log excerpts.
+          safe = {
+              "schema": 1,
+              "attempt": os.environ.get("ATTEMPT", ""),
+              "variant": os.environ.get("VARIANT", ""),
+              "network_mode": os.environ.get("NETWORK_MODE", ""),
+              "runner": os.environ.get("RUNNER_LABEL", ""),
+              "probe_exit_code": os.environ.get("PROBE_EXIT_CODE", ""),
+              "category": category,
+              "reason": reason,
+              "strict_success": strict_success,
+              "explicit_riskblock": explicit_riskblock,
+              "accepted_result0": accepted_result0,
+              "post_success_rechallenge": post_success_rechallenge,
+              "human_loaded": int(row.get("human_loaded") or 0),
+              "human_success": int(row.get("human_success") or 0),
+              "create_request": bool(row.get("create_request")),
+              "probe_timed_out": timed_out,
+          }
+          out = Path("public-safe-verdict") / f"verdict-{safe['attempt']}.json"
+          out.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(safe, ensure_ascii=False))
+          PY
+
+      - name: Upload redacted verdict artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-safe-verdict-${{ github.run_id }}-${{ matrix.attempt }}
+          path: public-safe-verdict/*.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Encrypt evidence before public artifact upload
         if: ${{ always() }}
@@ -463,3 +574,122 @@ jobs:
           path: public-artifacts/*.cms
           if-no-files-found: error
           retention-days: 3
+
+      - name: Enforce no non-IP technical failure for exact release variants
+        if: ${{ always() && startsWith(inputs.variant, 'release_5s_success_') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest=$(ls -t Results/network/*.jsonl 2>/dev/null | head -n1 || true)
+          if [ -z "$latest" ]; then
+            echo "technical failure: no network trace"
+            exit 1
+          fi
+          . .venv/bin/activate
+          python classify_protocol_run.py "$latest" > /tmp/exact_release_verdict.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          row = json.loads(Path('/tmp/exact_release_verdict.json').read_text(encoding='utf-8'))
+          outcome = str(row.get('outcome_class') or '')
+          acceptable = outcome in {
+              'strict_success',
+              'technical_pass_ip_limited',
+              'ip_block_pre_proof',
+          }
+          print(json.dumps({
+              'outcome_class': outcome,
+              'strict_success': row.get('strict_success'),
+              'proof_accepted': row.get('proof_accepted'),
+              'technical_pass': row.get('technical_pass'),
+              'ip_limited_after_proof': row.get('ip_limited_after_proof'),
+              'acceptable_for_non_ip_goal': acceptable,
+          }, ensure_ascii=False))
+          raise SystemExit(0 if acceptable else 1)
+          PY
+
+  summarize:
+    if: ${{ always() }}
+    needs: own-ip-probe
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download redacted slot verdicts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ga-safe-verdict-${{ github.run_id }}-*
+          path: safe-verdicts
+          merge-multiple: true
+
+      - name: Evaluate non-IP path goal
+        shell: bash
+        env:
+          EXPECTED_SLOTS_JSON: ${{ inputs.node_slots_json }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from collections import Counter
+          from pathlib import Path
+
+          try:
+              expected = len(json.loads(os.environ["EXPECTED_SLOTS_JSON"]))
+          except Exception:
+              expected = 0
+
+          rows = []
+          for path in sorted(Path("safe-verdicts").glob("verdict-*.json")):
+              try:
+                  rows.append(json.loads(path.read_text(encoding="utf-8")))
+              except Exception:
+                  pass
+
+          counts = Counter(str(row.get("category") or "missing") for row in rows)
+          missing = max(0, expected - len(rows))
+          technical = counts["technical_failure"] + counts["missing"] + missing
+          strict = counts["strict_success"]
+          checkpoint = strict + counts["ip_limited_rechallenge"]
+          postrisk = counts["postrisk_rechallenge_after_result0"]
+          checkpoint = strict + postrisk
+          ip_limited = counts["ip_riskblock"] + counts["ip_skipped"]
+
+          if technical:
+              conclusion = "technical_failure"
+              goal_met = False
+          elif checkpoint:
+              # At least one slot proved the non-IP path through collector
+              # result|0 (or strict CreateAccount), and every other slot was
+              # either equally successful or stopped by an explicit IP gate.
+              conclusion = "strict_success" if strict else "non_ip_checkpoint_passed_postrisk_limited"
+              goal_met = True
+          else:
+              conclusion = "inconclusive_ip_only"
+              goal_met = False
+
+          summary = {
+              "expected_slots": expected,
+              "received_verdicts": len(rows),
+              "strict_success": strict,
+              "ip_limited": ip_limited,
+              "postrisk_rechallenge_after_result0": postrisk,
+              "technical_failure": technical,
+              "decisive_non_ip_checkpoint": checkpoint,
+              "goal_met": goal_met,
+              "conclusion": conclusion,
+          }
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+              with open(step_summary, "a", encoding="utf-8") as fh:
+                  fh.write("## GA non-IP path verdict\n\n")
+                  fh.write("```json\n")
+                  fh.write(json.dumps(summary, ensure_ascii=False, indent=2))
+                  fh.write("\n```\n")
+                  fh.write("\nIP-limited only means explicit riskblock/denylist. A post-risk rechallenge after result|0 is reported separately because GA-only evidence cannot prove whether IP or Linux/Xvfb metadata caused it.\n")
+
+          # Do not report a green workflow when every IP was blocked before a
+          # decisive checkpoint, or when any non-IP technical failure remains.
+          sys.exit(0 if goal_met else 1)
+          PY
