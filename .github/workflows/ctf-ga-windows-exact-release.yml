@@ -1,0 +1,290 @@
+name: CTF GA Windows exact release baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_slots_json:
+        description: "Fresh windows-latest runner slots (one GA egress per matrix job)"
+        required: true
+        default: "[1,2,3]"
+      timeout_minutes:
+        description: "Per-slot job timeout"
+        required: true
+        default: "25"
+      probe_timeout_minutes:
+        description: "Live probe timeout; evidence is still encrypted and uploaded"
+        required: true
+        default: "12"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exact-release:
+    runs-on: windows-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: ${{ fromJSON(inputs.node_slots_json) }}
+    env:
+      PYTHONIOENCODING: utf-8
+      CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
+      RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
+      # Pin the reviewed private-source snapshot. Do not replace this with a
+      # mutable branch variable: otherwise OS and source change together.
+      PRIVATE_SOURCE_SHA: 7a5e399dd4a7cc933e3692918cb69881c44417df
+    steps:
+      - name: Checkout pinned private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: 7a5e399dd4a7cc933e3692918cb69881c44417df
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+          clean: true
+
+      - name: Verify source and baseline assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:PRIVATE_SOURCE_SHA) {
+            throw "Private source mismatch: expected=$env:PRIVATE_SOURCE_SHA actual=$actual"
+          }
+          @(
+            "protocol_runtime_probe.py",
+            "classify_protocol_run.py",
+            "config.release-5s-success-ga.json",
+            "requirements.txt"
+          ) | ForEach-Object {
+            if (-not (Test-Path -LiteralPath $_ -PathType Leaf)) { throw "Missing baseline asset: $_" }
+          }
+          New-Item -ItemType Directory -Force -Path Results\diagnostics | Out-Null
+          [ordered]@{
+            source_commit = $actual
+            runner_os = $env:RUNNER_OS
+            runner_arch = $env:RUNNER_ARCH
+            attempt = ${{ matrix.attempt }}
+            baseline = "local-release-success-20260711"
+          } | ConvertTo-Json | Set-Content Results\diagnostics\windows_source.json -Encoding utf8
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Python and CloakBrowser environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip wheel setuptools
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+          $ErrorActionPreference = "Continue"
+          .\.venv\Scripts\python.exe -m cloakbrowser install
+          $installCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          if ($installCode -ne 0) {
+            $chrome = Get-ChildItem -Path "$env:USERPROFILE\.cloakbrowser", "$env:USERPROFILE\.cache\cloakbrowser" `
+              -Filter chrome.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $chrome) { throw "cloakbrowser install failed with exit_code=$installCode and no chrome.exe was extracted" }
+          }
+          .\.venv\Scripts\python.exe -m cloakbrowser info
+
+      - name: Capture fresh GA Windows egress
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path Results\diagnostics | Out-Null
+          try { $ip = (Invoke-RestMethod -Uri https://api.ipify.org -TimeoutSec 10).Trim() } catch { $ip = "" }
+          [ordered]@{
+            attempt = ${{ matrix.attempt }}
+            public_ip = $ip
+            runner = "windows-latest"
+            runner_os = $env:RUNNER_OS
+            runner_arch = $env:RUNNER_ARCH
+          } | ConvertTo-Json | Set-Content Results\diagnostics\ga_egress.json -Encoding utf8
+          Write-Host "GA_PUBLIC_IP=$ip"
+
+      - name: Run exact release 5s baseline
+        id: live
+        continue-on-error: true
+        shell: pwsh
+        env:
+          OUTLOOK_SIGNUP_CHECK_AVAILABLE_PREFETCH_MODE: "off"
+          OUTLOOK_SIGNUP_SUBMIT_MODE: "dom_fast"
+          OUTLOOK_SIGNUP_NAME_SUBMIT_MODE: "native"
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force -Path `
+            Results\protocol_runtime, Results\network, Results\protocol_takeover, Results\diagnostics, profiles | Out-Null
+          $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+          $log = "Results\protocol_runtime\windows_release_5s_success_$stamp.log"
+          $privateConsole = "Results\diagnostics\windows_private_console_$stamp.log"
+          $py = ".\.venv\Scripts\python.exe"
+          $probeArgs = @(
+            "protocol_runtime_probe.py",
+            "--config", "config.release-5s-success-ga.json",
+            "--fresh-profile-prefix", "win-release-5s-success-$stamp",
+            "--use-cloakbrowser",
+            "--cloak-human-preset", "careful",
+            "--mode", "time_warp_hold",
+            "--route-only-hook",
+            "--defer-route-hook-until-proof",
+            "--normalize-y1nz-preproof",
+            "--final-proof-normalizer", "ads_safe",
+            "--disable-visible-iframe-fallback",
+            "--time-warp-install-mode", "early",
+            "--time-warp-clock-mode", "full",
+            "--normalize-px1200-timing", "on",
+            "--px1200-timing-profile", "default",
+            "--align-px561-timing-from-px1200",
+            "--inject-knp-sandbox-event",
+            "--exact-knp-wait-ms", "1600",
+            "--exact-knp-fallback-grace-ms", "1600",
+            "--synthetic-u0-lead-ms", "650",
+            "--early-w0-drain-before-final-ms", "-1",
+            "--early-w0-drain-after-final-ms", "160",
+            "--delayed-final-hard-extra-ms", "1200",
+            "--time-warp-hold-ms", "15000",
+            "--time-warp-wall-ms", "6500",
+            "--time-warp-stop-delay-ms", "900",
+            "--time-warp-prewait-ms", "0",
+            "--time-warp-pre-down-dwell-ms", "1200",
+            "--time-warp-frame-scope", "challenge",
+            "--time-warp-attempts", "1",
+            "--time-warp-retry-visible-challenge-after-ms", "7000",
+            "--time-warp-finished-stable-ms", "4500",
+            "--wait-before-ms", "30000",
+            "--wait-after-ms", "130000",
+            "--skip-mid-snapshots",
+            "--disable-synthetic-u0",
+            "--force-synthetic-final-template-network", ".\Results\network\20260704_200613_vde2anwfdvoerk.jsonl",
+            "--captcha-close-grace-ms", "3000",
+            "--real-target-wait-ms", "1500",
+            "--allow-guarded-layout-fallback",
+            "--bot-protection-wait-seconds", "0",
+            "--signup-entry-mode", "msal_authorize",
+            "--signup-fill-mode", "protocol_assist",
+            "--real-final-neutral-w0-success",
+            "--defer-final-result-to-w0-wait-ms", "3500",
+            "--delay-captcha-close-ms", "8000",
+            "--risk-verify-gate-ms", "1450",
+            "--risk-verify-gate-timeout-ms", "9000",
+            "--risk-verify-human-success-age-ms", "650",
+            "--risk-verify-human-success-timeout-ms", "3000",
+            "--dense-cdp-hold-input",
+            "--hybrid-legacy-down-cdp-move-up",
+            "--legacy-short-hold-steps", "24",
+            "--min-runtime-hook-ready-frames", "6",
+            "--min-knp-prestart-ok", "5",
+            "--require-chctx-runtime-ready",
+            "--prehold-readiness-gate-ms", "1800"
+          )
+
+          $privateError = "Results\diagnostics\windows_private_stderr_$stamp.log"
+          $process = Start-Process -FilePath $py -ArgumentList $probeArgs -WorkingDirectory $PWD.Path `
+            -RedirectStandardOutput $privateConsole -RedirectStandardError $privateError -PassThru
+          $finished = $process.WaitForExit([int]"${{ inputs.probe_timeout_minutes }}" * 60 * 1000)
+          if (-not $finished) {
+            # Kill the browser descendants too; otherwise locked profile files
+            # can prevent the evidence archive from being created.
+            & taskkill.exe /PID $process.Id /T /F *> $null
+            "probe_timeout" | Set-Content Results\diagnostics\probe_timeout.txt -Encoding utf8
+            $ec = 124
+          } else {
+            $ec = $process.ExitCode
+          }
+          # The raw console can contain generated credentials. Keep it only in
+          # the encrypted Results bundle; never copy it into the public job log.
+          Get-Content $privateConsole, $privateError -ErrorAction SilentlyContinue |
+            Set-Content $log -Encoding utf8
+          "exit_code=$ec" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "probe_exit_code=$ec"
+
+      - name: Classify strict business result
+        id: verdict
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force -Path Results\diagnostics | Out-Null
+          $latest = Get-ChildItem Results\network -Filter *.jsonl -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $classificationPath = "Results\diagnostics\windows_strict_classification.json"
+          if ($latest) {
+            & .\.venv\Scripts\python.exe classify_protocol_run.py $latest.FullName |
+              Set-Content $classificationPath -Encoding utf8
+          }
+          if (-not (Test-Path $classificationPath)) {
+            [ordered]@{ verdict = "no_network_trace"; create_200 = $false; create_request = $false } |
+              ConvertTo-Json | Set-Content $classificationPath -Encoding utf8
+          }
+          $row = Get-Content $classificationPath -Raw | ConvertFrom-Json
+          $strictSuccess = ($row.verdict -eq "create_account_200" -and $row.create_200 -eq $true)
+          "strict_success=$($strictSuccess.ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "verdict=$($row.verdict)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          "## Windows exact-release attempt ${{ matrix.attempt }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "source=$env:PRIVATE_SOURCE_SHA" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "probe_exit_code=${{ steps.live.outputs.exit_code }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $safe = [ordered]@{
+            verdict = $row.verdict
+            create_200 = $row.create_200
+            create_request = $row.create_request
+            riskblock = $row.riskblock
+            human_loaded = $row.human_loaded
+            human_success = $row.human_success
+            captcha_close_minus1 = $row.captcha_close_minus1
+            risk_verify_second_challenge = $row.risk_verify_second_challenge
+            live_timeout = $row.live_timeout
+          }
+          '```json' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $safe | ConvertTo-Json | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Encrypt evidence before public upload
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:RESULTS_ENCRYPTION_CERT_B64)) {
+            throw "RESULTS_ENCRYPTION_CERT_B64 repository variable is required"
+          }
+          New-Item -ItemType Directory -Force -Path public-artifacts, .public-encryption | Out-Null
+          [IO.File]::WriteAllBytes(
+            (Join-Path $PWD ".public-encryption\results_public_cert.pem"),
+            [Convert]::FromBase64String($env:RESULTS_ENCRYPTION_CERT_B64)
+          )
+          tar.exe -C Results -czf .public-encryption\results.tar.gz .
+          if ($LASTEXITCODE -ne 0) { throw "tar failed with exit_code=$LASTEXITCODE" }
+          $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+          if (-not $openssl) { $openssl = "C:\Program Files\Git\usr\bin\openssl.exe" }
+          if (-not (Test-Path -LiteralPath $openssl)) { throw "openssl.exe not found" }
+          & $openssl cms -encrypt -binary -aes-256-cbc `
+            -in .public-encryption\results.tar.gz `
+            -out "public-artifacts\windows-evidence-${{ github.run_id }}-${{ matrix.attempt }}.cms" `
+            -outform DER `
+            .public-encryption\results_public_cert.pem
+          if ($LASTEXITCODE -ne 0) { throw "openssl cms failed with exit_code=$LASTEXITCODE" }
+          Remove-Item -Recurse -Force .public-encryption
+
+      - name: Upload encrypted evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-windows-exact-release-${{ github.run_id }}-${{ matrix.attempt }}
+          path: public-artifacts/*.cms
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Enforce strict business verdict
+        if: always()
+        shell: pwsh
+        run: |
+          if ("${{ steps.verdict.outputs.strict_success }}" -ne "true") {
+            throw "Strict business failure: verdict=${{ steps.verdict.outputs.verdict }} probe_exit_code=${{ steps.live.outputs.exit_code }}"
+          }
+          Write-Host "Strict CreateAccount success confirmed."
