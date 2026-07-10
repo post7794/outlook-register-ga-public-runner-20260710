@@ -15,6 +15,8 @@ on:
         options:
           - default
           - semiprotocol_5s_stable
+          - paired_5s_then_thin
+          - paired_thin_then_5s
           - natural_legacy
           - ui_natural
       runner:
@@ -313,37 +315,63 @@ jobs:
           echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
           echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
           echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
-          cmd=()
-          if [ "${{ inputs.variant }}" = "semiprotocol_5s_stable" ]; then
-            cmd=(./run_xvfb_semiprotocol_5s_1920.sh)
-          elif [ "${{ inputs.variant }}" = "ui_natural" ]; then
-            cmd=(./run_xvfb_ui_natural_1920.sh)
-          elif [ "${{ inputs.variant }}" = "natural_legacy" ]; then
-            cmd=(./run_xvfb_natural_legacy_1920.sh)
-          else
-            cmd=(./run_xvfb_natural_1920.sh)
-          fi
+          variant="${{ inputs.variant }}"
           echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
-          if [ "${{ inputs.per_ip_max_registrations }}" -gt 1 ]; then
-            python3 tools/run_ga_ip_capacity_loop.py \
-              --variant "${{ inputs.variant }}" \
-              --max-registrations "${{ inputs.per_ip_max_registrations }}" \
-              --probe-timeout-minutes "${{ inputs.probe_timeout_minutes }}" \
-              >"$private_console" 2>&1
-            ec=$?
+          if [ "$variant" = "paired_5s_then_thin" ] || [ "$variant" = "paired_thin_then_5s" ]; then
+            if [ "${{ inputs.per_ip_max_registrations }}" -ne 1 ]; then
+              echo "paired variants require per_ip_max_registrations=1" >&2
+              exit 2
+            fi
+            if [ "$variant" = "paired_5s_then_thin" ]; then
+              labels=(five_seconds thin)
+              commands=(./run_xvfb_semiprotocol_5s_1920.sh ./run_xvfb_natural_1920.sh)
+            else
+              labels=(thin five_seconds)
+              commands=(./run_xvfb_natural_1920.sh ./run_xvfb_semiprotocol_5s_1920.sh)
+            fi
+            : > "$private_console"
+            ec=0
+            for i in 0 1; do
+              echo "[PUBLIC_AB] begin order=$i variant=${labels[$i]}" | tee -a "$private_console"
+              timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${commands[$i]}" \
+                >>"$private_console" 2>&1
+              one_ec=$?
+              echo "[PUBLIC_AB] end order=$i variant=${labels[$i]} exit_code=$one_ec" | tee -a "$private_console"
+              if [ "$one_ec" = "124" ]; then
+                echo "paired_${labels[$i]}_probe_timeout" > "Results/diagnostics/paired_${labels[$i]}_probe_timeout.txt"
+              fi
+            done
           else
-            timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
-              >"$private_console" 2>&1
-            ec=$?
-            if [ "$ec" = "124" ]; then
-              echo "[GAOwnIP] probe timed out after ${{ inputs.probe_timeout_minutes }}m"
-              mkdir -p Results/diagnostics
-              echo "probe_timeout" > Results/diagnostics/probe_timeout.txt
+            cmd=()
+            if [ "$variant" = "semiprotocol_5s_stable" ]; then
+              cmd=(./run_xvfb_semiprotocol_5s_1920.sh)
+            elif [ "$variant" = "ui_natural" ]; then
+              cmd=(./run_xvfb_ui_natural_1920.sh)
+            elif [ "$variant" = "natural_legacy" ]; then
+              cmd=(./run_xvfb_natural_legacy_1920.sh)
+            else
+              cmd=(./run_xvfb_natural_1920.sh)
+            fi
+            if [ "${{ inputs.per_ip_max_registrations }}" -gt 1 ]; then
+              python3 tools/run_ga_ip_capacity_loop.py \
+                --variant "$variant" \
+                --max-registrations "${{ inputs.per_ip_max_registrations }}" \
+                --probe-timeout-minutes "${{ inputs.probe_timeout_minutes }}" \
+                >"$private_console" 2>&1
+              ec=$?
+            else
+              timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
+                >"$private_console" 2>&1
+              ec=$?
+              if [ "$ec" = "124" ]; then
+                echo "[GAOwnIP] probe timed out after ${{ inputs.probe_timeout_minutes }}m"
+                echo "probe_timeout" > Results/diagnostics/probe_timeout.txt
+              fi
             fi
           fi
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
           echo "public_safe_probe_summary:"
-          grep -E "outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out" "$private_console" 2>/dev/null \
+          grep -E "\[PUBLIC_AB\]|outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out" "$private_console" 2>/dev/null \
             | sed -E 's/[[:alnum:]._%+-]+@(outlook|hotmail)\.com/<redacted-email>/g' \
             | tail -40 || true
           # Matrix attempts are allowed to fail individually. The summarize job
@@ -390,12 +418,12 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${RESULTS_ENCRYPTION_CERT_B64:-}"
-          mkdir -p .public-artifacts .public-encryption
+          mkdir -p public-artifacts .public-encryption
           printf '%s' "$RESULTS_ENCRYPTION_CERT_B64" | base64 -d > .public-encryption/results_public_cert.pem
           tar -C Results -czf .public-encryption/results.tar.gz .
           openssl cms -encrypt -binary -aes-256-cbc \
             -in .public-encryption/results.tar.gz \
-            -out .public-artifacts/evidence-${{ github.run_id }}-${{ matrix.attempt }}.cms \
+            -out public-artifacts/evidence-${{ github.run_id }}-${{ matrix.attempt }}.cms \
             -outform DER \
             .public-encryption/results_public_cert.pem
           rm -rf .public-encryption
@@ -405,6 +433,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ga-encrypted-${{ inputs.variant }}-${{ github.run_id }}-${{ matrix.attempt }}
-          path: .public-artifacts/*.cms
+          path: public-artifacts/*.cms
           if-no-files-found: error
           retention-days: 3
