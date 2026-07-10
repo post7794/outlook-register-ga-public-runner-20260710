@@ -25,6 +25,7 @@ on:
           - semiprotocol_5s_stable
           - semiprotocol_5s_historical_firstpass
           - semiprotocol_5s_histfp_no_inject_knp
+          - release_5s_success_baseline
           - paired_5s_then_thin
           - paired_thin_then_5s
           - natural_legacy
@@ -366,6 +367,8 @@ jobs:
               cmd=(./run_xvfb_semiprotocol_5s_historical_firstpass_1920.sh)
             elif [ "$variant" = "semiprotocol_5s_histfp_no_inject_knp" ]; then
               cmd=(./run_xvfb_semiprotocol_5s_histfp_no_inject_knp_1920.sh)
+            elif [ "$variant" = "release_5s_success_baseline" ]; then
+              cmd=(./run_xvfb_release_5s_success_baseline.sh)
             elif [ "$variant" = "ui_natural" ]; then
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
