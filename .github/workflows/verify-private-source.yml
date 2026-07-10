@@ -1,0 +1,30 @@
+name: Verify private source access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout private source with read-only deploy key
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ vars.PRIVATE_SOURCE_REF }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+          clean: true
+
+      - name: Verify expected source without publishing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f requirements.txt
+          test -f run_xvfb_semiprotocol_5s_1920.sh
+          echo "private_source_checkout=ok"
+          echo "private_source_commit=$(git rev-parse --short=12 HEAD)"

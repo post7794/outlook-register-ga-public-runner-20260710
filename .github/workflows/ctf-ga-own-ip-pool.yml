@@ -1,0 +1,421 @@
+name: CTF GA own IP pool probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: "Parallel fresh GA-hosted runner attempts, 1-20"
+        required: true
+        default: "5"
+      variant:
+        description: "Probe variant to run on each fresh GA egress IP"
+        required: true
+        default: "default"
+        type: choice
+        options:
+          - default
+          - semiprotocol_5s_stable
+          - natural_legacy
+          - ui_natural
+      runner:
+        description: "Ubuntu runner label for the GA egress pool"
+        required: true
+        default: "ubuntu-22.04"
+        type: choice
+        options:
+          - ubuntu-latest
+          - ubuntu-24.04
+          - ubuntu-22.04
+      timeout_minutes:
+        description: "Per-job timeout minutes"
+        required: true
+        default: "25"
+      probe_timeout_minutes:
+        description: "Live probe timeout inside each job; timed-out bad IPs still upload evidence"
+        required: true
+        default: "12"
+      per_ip_max_registrations:
+        description: "Repeat successful registrations on the same GA egress IP until first non-success, capped here. Use 1 for legacy one-shot probing."
+        required: true
+        default: "1"
+      egress_prefix_denylist:
+        description: "Optional comma-separated bad egress IP prefixes to skip before touching the target, e.g. 20.,52.,40.116."
+        required: false
+        default: ""
+      pre_first_hold_warmup_ms:
+        description: "Override captcha pre-first-hold warmup in ms; empty uses config default"
+        required: false
+        default: ""
+      proxy_pool_file:
+        description: "Optional checked-in private-source mihomo YAML. If empty, the optional CTF_PROXY_SUBSCRIPTION_URL Actions Secret is used."
+        required: false
+        default: ""
+permissions:
+  contents: read
+
+jobs:
+  own-ip-probe:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    env:
+      PYTHONIOENCODING: utf-8
+      CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
+      CTF_PROXY_SUBSCRIPTION_URL: ${{ secrets.CTF_PROXY_SUBSCRIPTION_URL }}
+      RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
+    steps:
+      - name: Skip disabled matrix slot
+        if: ${{ matrix.attempt > fromJSON(inputs.attempts) }}
+        shell: bash
+        run: echo "skip attempt=${{ matrix.attempt }} attempts=${{ inputs.attempts }}"
+
+      - name: Checkout
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ vars.PRIVATE_SOURCE_REF }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+          clean: true
+
+      - name: System dependencies
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth ca-certificates curl unzip fontconfig software-properties-common \
+            fonts-liberation fonts-noto fonts-noto-cjk fonts-crosextra-carlito fonts-crosextra-caladea
+          sudo apt-get install -y --no-install-recommends fonts-selawik || true
+          sudo add-apt-repository -y multiverse || true
+          sudo apt-get update || true
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | sudo debconf-set-selections || true
+          sudo apt-get install -y --no-install-recommends ttf-mscorefonts-installer || true
+          fc-cache -f
+
+      - name: Python environment
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r requirements.txt
+          set +e
+          python -m cloakbrowser install
+          cb_code=$?
+          set -e
+          if [ "$cb_code" -ne 0 ]; then
+            echo "cloakbrowser install exited $cb_code; checking extracted binary"
+            test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+          fi
+
+      - name: Install Windows-like font family aliases
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          . .venv/bin/activate
+          python - <<'PY'
+          from fontTools.ttLib import TTFont
+          from pathlib import Path
+
+          out = Path.home() / ".local/share/fonts/windows-ctf"
+          out.mkdir(parents=True, exist_ok=True)
+
+          def pick(*paths):
+              return next((Path(p) for p in paths if Path(p).exists()), None)
+
+          default_src = pick(
+              '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+              '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+              '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',
+              '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
+          )
+          selawik_src = pick(
+              '/usr/share/fonts/truetype/selawik/Selawik.ttf',
+              '/usr/share/fonts/truetype/selawik/Selawik-Regular.ttf',
+          ) or default_src
+          calibri_src = pick(
+              '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
+              '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',
+          ) or default_src
+          msgothic_src = pick(
+              '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+              '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+          ) or default_src
+          if not default_src:
+              raise SystemExit('no base font found')
+
+          def set_name(font, name_id, value):
+              font['name'].setName(value, name_id, 3, 1, 0x409)
+              font['name'].setName(value, name_id, 1, 0, 0)
+
+          families = [
+              ('Segoe UI', 'Regular', selawik_src),
+              ('Segoe UI Light', 'Regular', selawik_src),
+              ('Calibri', 'Regular', calibri_src),
+              ('Cambria', 'Regular', pick('/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf') or calibri_src),
+              ('Marlett', 'Regular', default_src),
+              ('MS UI Gothic', 'Regular', msgothic_src),
+              ('Franklin Gothic', 'Regular', default_src),
+          ]
+          for family, subfamily, src in families:
+              try:
+                  font = TTFont(str(src))
+              except Exception as exc:
+                  if exc.__class__.__name__ == 'TTLibFileIsCollectionError':
+                      font = TTFont(str(src), fontNumber=0)
+                  else:
+                      raise
+              full = f'{family} {subfamily}'
+              ps = ''.join(ch for ch in full if ch.isalnum())
+              set_name(font, 1, family)
+              set_name(font, 2, subfamily)
+              set_name(font, 4, full)
+              set_name(font, 6, ps)
+              set_name(font, 16, family)
+              set_name(font, 17, subfamily)
+              font.save(str(out / f'{ps}.ttf'))
+          PY
+          fc-cache -f "$HOME/.local/share/fonts"
+          fc-match 'Segoe UI' | head -1
+          fc-match 'Calibri' | head -1
+
+      - name: Normalize shell scripts
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sed -i 's/\r$//' run_xvfb_*.sh
+          chmod +x run_xvfb_*.sh
+
+      - name: Start subscription proxy
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
+        shell: bash
+        env:
+          PROXY_SUBSCRIPTION_URL: ${{ env.CTF_PROXY_SUBSCRIPTION_URL }}
+          PROXY_POOL_FILE: ${{ inputs.proxy_pool_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p Results/diagnostics .mihomo-ga
+          . .venv/bin/activate
+          source_args=()
+          if [ -n "$PROXY_SUBSCRIPTION_URL" ]; then
+            source_args=(--url "$PROXY_SUBSCRIPTION_URL")
+          else
+            test -f "$PROXY_POOL_FILE"
+            source_args=(--config "$PROXY_POOL_FILE")
+          fi
+          python tools/setup_ga_subscription_proxy.py \
+            "${source_args[@]}" \
+            --node-slot "${{ matrix.attempt }}" \
+            --out-dir .mihomo-ga \
+            --http-port 17890 \
+            --socks-port 17891 \
+            --controller-port 19090 | tee Results/diagnostics/proxy_select.txt
+
+          # Pin the release asset used by the verified proxy runs. Querying the
+          # GitHub releases API independently from 20 jobs can hit the unauthenticated
+          # rate limit and drop a matrix slot before its live probe starts.
+          asset_url="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.28/mihomo-linux-amd64-v1-v1.19.28.gz"
+          echo "mihomo_asset=$asset_url" >> Results/diagnostics/proxy_select.txt
+          curl -fsSL "$asset_url" -o .mihomo-ga/mihomo.gz
+          gzip -dc .mihomo-ga/mihomo.gz > .mihomo-ga/mihomo
+          chmod +x .mihomo-ga/mihomo
+          nohup .mihomo-ga/mihomo -d .mihomo-ga -f .mihomo-ga/config.yaml > Results/diagnostics/mihomo.log 2>&1 &
+          echo "$!" > Results/diagnostics/mihomo.pid
+          sleep 2
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 8 -x http://127.0.0.1:17890 https://api.ipify.org > Results/diagnostics/proxy_public_ip.txt 2>>Results/diagnostics/proxy_curl.err; then
+              break
+            fi
+            sleep 2
+          done
+          proxy_ip="$(cat Results/diagnostics/proxy_public_ip.txt 2>/dev/null || true)"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          selected = {}
+          try:
+              selected = json.loads(Path(".mihomo-ga/selected_proxy.json").read_text(encoding="utf-8"))
+          except Exception as exc:
+              selected = {"selected_error": repr(exc)}
+          proxy_ip = Path("Results/diagnostics/proxy_public_ip.txt").read_text(encoding="utf-8", errors="replace").strip() if Path("Results/diagnostics/proxy_public_ip.txt").exists() else ""
+          selected["proxy_public_ip"] = proxy_ip
+          selected["proxy_ready"] = bool(proxy_ip)
+          Path("Results/diagnostics/ga_proxy_egress.json").write_text(json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps({"proxy_ready": bool(proxy_ip), "proxy_public_ip": proxy_ip, "selected_index": selected.get("selected_index"), "selected_name": selected.get("selected_name")}, ensure_ascii=False))
+          PY
+          cat Results/diagnostics/ga_proxy_egress.json
+          echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
+
+      - name: Capture GA egress
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
+        id: egress
+        shell: bash
+        env:
+          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist }}
+        run: |
+          set -euxo pipefail
+          mkdir -p Results/diagnostics
+          ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+          export GA_PUBLIC_IP="$ip"
+          python - <<'PY'
+          import json
+          import os
+          import re
+          data = {
+              "attempt": ${{ matrix.attempt }},
+              "variant": "${{ inputs.variant }}",
+              "runner": "${{ inputs.runner }}",
+              "runner_os": "${{ runner.os }}",
+              "runner_arch": "${{ runner.arch }}",
+              "public_ip": os.environ.get("GA_PUBLIC_IP", ""),
+              "egress_prefix_denylist": os.environ.get("EGRESS_PREFIX_DENYLIST", ""),
+          }
+          with open("Results/diagnostics/ga_egress.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          print(json.dumps(data, ensure_ascii=False))
+
+          ip = data.get("public_ip") or ""
+          raw = os.environ.get("EGRESS_PREFIX_DENYLIST", "")
+          prefixes = [p.strip() for p in raw.split(",") if p.strip()]
+          matched = ""
+          for prefix in prefixes:
+              # Accept "20.", "20", "40.116.", or exact full IP style tokens.
+              token = prefix
+              if re.fullmatch(r"\d{1,3}", token):
+                  token += "."
+              if ip == token.rstrip(".") or ip.startswith(token):
+                  matched = prefix
+                  break
+          github_output = os.environ.get("GITHUB_OUTPUT")
+          if matched:
+              reason = f"egress_prefix_denylist matched prefix={matched} ip={ip}"
+              with open("Results/diagnostics/egress_skip.txt", "w", encoding="utf-8") as f:
+                  f.write(reason + "\n")
+              print(reason)
+              if github_output:
+                  with open(github_output, "a", encoding="utf-8") as f:
+                      f.write("should_probe=false\n")
+                      f.write(f"skip_reason={reason}\n")
+          elif github_output:
+              with open(github_output, "a", encoding="utf-8") as f:
+                  f.write("should_probe=true\n")
+          PY
+
+      - name: Run no-proxy live probe on GA own IP
+        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) && steps.egress.outputs.should_probe != 'false' }}
+        id: live
+        shell: bash
+        env:
+          OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS: ${{ inputs.pre_first_hold_warmup_ms }}
+        run: |
+          set +e
+          mkdir -p Results/diagnostics
+          private_console="Results/diagnostics/public_runner_private_console.log"
+          echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
+          echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
+          echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
+          cmd=()
+          if [ "${{ inputs.variant }}" = "semiprotocol_5s_stable" ]; then
+            cmd=(./run_xvfb_semiprotocol_5s_1920.sh)
+          elif [ "${{ inputs.variant }}" = "ui_natural" ]; then
+            cmd=(./run_xvfb_ui_natural_1920.sh)
+          elif [ "${{ inputs.variant }}" = "natural_legacy" ]; then
+            cmd=(./run_xvfb_natural_legacy_1920.sh)
+          else
+            cmd=(./run_xvfb_natural_1920.sh)
+          fi
+          echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
+          if [ "${{ inputs.per_ip_max_registrations }}" -gt 1 ]; then
+            python3 tools/run_ga_ip_capacity_loop.py \
+              --variant "${{ inputs.variant }}" \
+              --max-registrations "${{ inputs.per_ip_max_registrations }}" \
+              --probe-timeout-minutes "${{ inputs.probe_timeout_minutes }}" \
+              >"$private_console" 2>&1
+            ec=$?
+          else
+            timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
+              >"$private_console" 2>&1
+            ec=$?
+            if [ "$ec" = "124" ]; then
+              echo "[GAOwnIP] probe timed out after ${{ inputs.probe_timeout_minutes }}m"
+              mkdir -p Results/diagnostics
+              echo "probe_timeout" > Results/diagnostics/probe_timeout.txt
+            fi
+          fi
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "public_safe_probe_summary:"
+          grep -E "outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out" "$private_console" 2>/dev/null \
+            | sed -E 's/[[:alnum:]._%+-]+@(outlook|hotmail)\.com/<redacted-email>/g' \
+            | tail -40 || true
+          # Matrix attempts are allowed to fail individually. The summarize job
+          # decides the workflow result based on whether at least one fresh GA IP
+          # completed account creation.
+          exit 0
+
+      - name: Summarize attempt without publishing credentials
+        if: ${{ always() && matrix.attempt <= fromJSON(inputs.attempts) }}
+        shell: bash
+        run: |
+          set +e
+          echo "## GA attempt ${{ matrix.attempt }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "variant=${{ inputs.variant }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "probe_exit_code=${{ steps.live.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
+          latest=$(ls -t Results/network/*.jsonl 2>/dev/null | head -n1 || true)
+          if [ -n "$latest" ]; then
+            . .venv/bin/activate
+            python classify_protocol_run.py "$latest" > /tmp/private_classification.json 2>/dev/null || true
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          p = Path('/tmp/private_classification.json')
+          if p.exists():
+              try:
+                  row = json.loads(p.read_text(encoding='utf-8'))
+              except Exception:
+                  row = {}
+              safe = {k: row.get(k) for k in (
+                  'verdict', 'create_200', 'create_request', 'riskblock',
+                  'human_loaded', 'human_success', 'captcha_close_minus1',
+                  'score0_no_result0_timeout', 'iframe_bootstrap_stall',
+                  'button_locate_timeout', 'live_timeout'
+              )}
+              print('```json')
+              print(json.dumps(safe, ensure_ascii=False, indent=2))
+              print('```')
+          PY
+          fi
+
+      - name: Encrypt evidence before public artifact upload
+        if: ${{ always() && matrix.attempt <= fromJSON(inputs.attempts) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RESULTS_ENCRYPTION_CERT_B64:-}"
+          mkdir -p .public-artifacts .public-encryption
+          printf '%s' "$RESULTS_ENCRYPTION_CERT_B64" | base64 -d > .public-encryption/results_public_cert.pem
+          tar -C Results -czf .public-encryption/results.tar.gz .
+          openssl cms -encrypt -binary -aes-256-cbc \
+            -in .public-encryption/results.tar.gz \
+            -out .public-artifacts/evidence-${{ github.run_id }}-${{ matrix.attempt }}.cms \
+            -outform DER \
+            .public-encryption/results_public_cert.pem
+          rm -rf .public-encryption
+
+      - name: Upload encrypted evidence artifact
+        if: ${{ always() && matrix.attempt <= fromJSON(inputs.attempts) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-encrypted-${{ inputs.variant }}-${{ github.run_id }}-${{ matrix.attempt }}
+          path: .public-artifacts/*.cms
+          if-no-files-found: error
+          retention-days: 3
