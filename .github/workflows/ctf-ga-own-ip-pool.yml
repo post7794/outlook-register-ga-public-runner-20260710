@@ -48,6 +48,10 @@ on:
         description: "Override captcha pre-first-hold warmup in ms; empty uses config default"
         required: false
         default: ""
+      primary_final_variant:
+        description: "Optional retry candidate promoted before the first real collector fetch"
+        required: false
+        default: ""
       proxy_pool_file:
         description: "Optional checked-in private-source mihomo YAML. If empty, the optional CTF_PROXY_SUBSCRIPTION_URL Actions Secret is used."
         required: false
@@ -68,6 +72,7 @@ jobs:
       CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
       CTF_PROXY_SUBSCRIPTION_URL: ${{ secrets.CTF_PROXY_SUBSCRIPTION_URL }}
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
+      OUTLOOK_REAL_FINAL_PRIMARY_VARIANT: ${{ inputs.primary_final_variant }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
