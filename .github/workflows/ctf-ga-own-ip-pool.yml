@@ -3,10 +3,10 @@ name: CTF GA own IP pool probe
 on:
   workflow_dispatch:
     inputs:
-      attempts:
-        description: "Parallel fresh GA-hosted runner attempts, 1-20"
+      node_slots_json:
+        description: "JSON array of private proxy-pool slots to run, for example [3,4,5,10,20]"
         required: true
-        default: "5"
+        default: "[1,2,3,4,5]"
       variant:
         description: "Probe variant to run on each fresh GA egress IP"
         required: true
@@ -60,20 +60,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        attempt: ${{ fromJSON(inputs.node_slots_json) }}
     env:
       PYTHONIOENCODING: utf-8
       CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
       CTF_PROXY_SUBSCRIPTION_URL: ${{ secrets.CTF_PROXY_SUBSCRIPTION_URL }}
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
     steps:
-      - name: Skip disabled matrix slot
-        if: ${{ matrix.attempt > fromJSON(inputs.attempts) }}
-        shell: bash
-        run: echo "skip attempt=${{ matrix.attempt }} attempts=${{ inputs.attempts }}"
-
       - name: Checkout
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
@@ -83,7 +77,6 @@ jobs:
           clean: true
 
       - name: System dependencies
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -99,7 +92,6 @@ jobs:
           fc-cache -f
 
       - name: Python environment
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -117,7 +109,6 @@ jobs:
           fi
 
       - name: Install Windows-like font family aliases
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -189,7 +180,6 @@ jobs:
           fc-match 'Calibri' | head -1
 
       - name: Normalize shell scripts
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -197,7 +187,7 @@ jobs:
           chmod +x run_xvfb_*.sh
 
       - name: Start subscription proxy
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
+        if: ${{ env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '' }}
         shell: bash
         env:
           PROXY_SUBSCRIPTION_URL: ${{ env.CTF_PROXY_SUBSCRIPTION_URL }}
@@ -257,7 +247,6 @@ jobs:
           echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
 
       - name: Capture GA egress
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) }}
         id: egress
         shell: bash
         env:
@@ -312,7 +301,7 @@ jobs:
           PY
 
       - name: Run no-proxy live probe on GA own IP
-        if: ${{ matrix.attempt <= fromJSON(inputs.attempts) && steps.egress.outputs.should_probe != 'false' }}
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
         id: live
         shell: bash
         env:
@@ -363,7 +352,7 @@ jobs:
           exit 0
 
       - name: Summarize attempt without publishing credentials
-        if: ${{ always() && matrix.attempt <= fromJSON(inputs.attempts) }}
+        if: ${{ always() }}
         shell: bash
         run: |
           set +e
@@ -396,7 +385,7 @@ jobs:
           fi
 
       - name: Encrypt evidence before public artifact upload
-        if: ${{ always() && matrix.attempt <= fromJSON(inputs.attempts) }}
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -412,7 +401,7 @@ jobs:
           rm -rf .public-encryption
 
       - name: Upload encrypted evidence artifact
-        if: ${{ always() && matrix.attempt <= fromJSON(inputs.attempts) }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: ga-encrypted-${{ inputs.variant }}-${{ github.run_id }}-${{ matrix.attempt }}
