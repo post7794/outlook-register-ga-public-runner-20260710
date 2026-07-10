@@ -33,13 +33,13 @@ jobs:
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       # Pin the reviewed private-source snapshot. Do not replace this with a
       # mutable branch variable: otherwise OS and source change together.
-      PRIVATE_SOURCE_SHA: b902d6637c7d8700d85991cbf109e181a7da349b
+      PRIVATE_SOURCE_SHA: 83a34991b97d79b590679953912f90632f2ce3ce
     steps:
       - name: Checkout pinned private source
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: b902d6637c7d8700d85991cbf109e181a7da349b
+          ref: 83a34991b97d79b590679953912f90632f2ce3ce
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -117,7 +117,6 @@ jobs:
           OUTLOOK_SIGNUP_SUBMIT_MODE: "dom_fast"
           OUTLOOK_SIGNUP_NAME_SUBMIT_MODE: "native"
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_SOLUTION_FALLBACKS: "0"
-          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_CHALLENGE_RETRIES: "3"
         run: |
           $ErrorActionPreference = "Continue"
           New-Item -ItemType Directory -Force -Path `
@@ -156,7 +155,8 @@ jobs:
             "--time-warp-prewait-ms", "0",
             "--time-warp-pre-down-dwell-ms", "1200",
             "--time-warp-frame-scope", "challenge",
-            "--time-warp-attempts", "4",
+            "--time-warp-attempts", "1",
+            "--time-warp-server-challenge-rounds", "8",
             "--time-warp-retry-visible-challenge-after-ms", "7000",
             "--time-warp-finished-stable-ms", "4500",
             "--wait-before-ms", "30000",
