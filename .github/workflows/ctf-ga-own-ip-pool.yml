@@ -62,6 +62,10 @@ on:
         description: "Override captcha pre-first-hold warmup in ms; empty uses config default"
         required: false
         default: ""
+      slot_stagger_seconds:
+        description: "Delay each matrix slot by (slot-1)*seconds before touching the target; use 0 for concurrent baseline"
+        required: true
+        default: "0"
       primary_final_variant:
         description: "Optional retry candidate promoted before the first real collector fetch"
         required: false
@@ -298,6 +302,15 @@ jobs:
           PY
           cat Results/diagnostics/ga_proxy_egress.json
           echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
+
+      - name: Stagger live target entry
+        if: ${{ inputs.network_mode == 'ga_own_ip' && fromJSON(inputs.slot_stagger_seconds) > 0 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          delay=$(( (${{ matrix.attempt }} - 1) * ${{ fromJSON(inputs.slot_stagger_seconds) }} ))
+          echo "slot=${{ matrix.attempt }} stagger_seconds=$delay"
+          sleep "$delay"
 
       - name: Capture GA egress
         id: egress
