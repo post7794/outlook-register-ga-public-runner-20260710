@@ -179,10 +179,14 @@ jobs:
           test -f ads_like_cloak_profile_generator.py
           test -n "${ADS_PROFILE_API_URL:-}"
           # Fresh-rechallenge isolation contract from P0 slot13 vs result0_rechallenge diffs.
-          controller="$(cat controllers/base_controller.py)"
-          echo "$controller" | grep -q 'fresh_rechallenge_isolation_reset'
-          echo "$controller" | grep -q 'synthetic_pt_markers'
-          ! echo "$controller" | grep -q 'pt_round=2&pt_ts='
+          # Grep the file directly. "echo "$huge" | grep -q" under pipefail can
+          # fail with Broken pipe when grep exits early after a match.
+          grep -q 'fresh_rechallenge_isolation_reset' controllers/base_controller.py
+          grep -q 'synthetic_pt_markers' controllers/base_controller.py
+          if grep -q 'pt_round=2&pt_ts=' controllers/base_controller.py; then
+            echo "unexpected synthetic pt_round/pt_ts append still present" >&2
+            exit 1
+          fi
 
       - name: System dependencies
         shell: bash
