@@ -121,7 +121,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '202390aefa4dba412de042ddc6ffcb808b22dc83' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '30909c7e21c3e1f01d6473039f06e609f31be784' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -184,13 +184,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=202390aefa4dba412de042ddc6ffcb808b22dc83
+          expected=30909c7e21c3e1f01d6473039f06e609f31be784
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
           test -f tools/fetch_ads_profile_template.py
           test -f ads_like_cloak_profile_generator.py
           grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
+          grep -q 'minimal_natural_hold' protocol_runtime_probe.py
+          grep -q -- '--final-proof-normalizer minimal_natural_hold' run_xvfb_natural_1920.sh
+          grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py
           test -n "${ADS_PROFILE_API_URL:-}"
           # Fresh-rechallenge isolation contract from P0 slot13 vs result0_rechallenge diffs.
           # Grep the file directly. "echo "$huge" | grep -q" under pipefail can
