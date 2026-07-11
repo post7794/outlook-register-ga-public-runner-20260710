@@ -25,6 +25,7 @@ on:
           - historical_ga_success_default
           - historical_ga_highrate_336a973
           - historical_ga_fresh_rechallenge
+          - online_ads_ga_fresh_rechallenge
           - semiprotocol_5s_stable
           - semiprotocol_5s_historical_firstpass
           - semiprotocol_5s_histfp_no_inject_knp
@@ -99,6 +100,7 @@ jobs:
       PYTHONIOENCODING: utf-8
       CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
       CTF_PROXY_SUBSCRIPTION_URL: ${{ secrets.CTF_PROXY_SUBSCRIPTION_URL }}
+      ADS_PROFILE_API_URL: ${{ secrets.ADS_PROFILE_API_URL }}
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       OUTLOOK_REAL_FINAL_PRIMARY_VARIANT: ${{ inputs.primary_final_variant }}
     steps:
@@ -106,7 +108,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '4ba5087c76c9e621f8c41bcfe843dd429767d254' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -163,6 +165,19 @@ jobs:
           assert "OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1" in wrapper
           assert '"hold_retries": 3' in config
           PY
+
+      - name: Verify online ADS source
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=4ba5087c76c9e621f8c41bcfe843dd429767d254
+          actual=$(git rev-parse HEAD)
+          echo "expected=$expected actual=$actual"
+          test "$actual" = "$expected"
+          test -f tools/fetch_ads_profile_template.py
+          test -f ads_like_cloak_profile_generator.py
+          test -n "${ADS_PROFILE_API_URL:-}"
 
       - name: System dependencies
         shell: bash
@@ -282,6 +297,42 @@ jobs:
           test -f run_xvfb_natural_1920.sh
           sed -i 's/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=0/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1/' run_xvfb_natural_1920.sh
           grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
+
+      - name: Fetch and apply online ADS fingerprint
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ads-online/generated Results/diagnostics
+          python3 tools/fetch_ads_profile_template.py \
+            --api-base "$ADS_PROFILE_API_URL" \
+            --slot "${{ matrix.attempt }}" \
+            --out .ads-online/profile.json | tee Results/diagnostics/ads_online_fetch.json
+          python3 ads_like_cloak_profile_generator.py \
+            --source-json .ads-online/profile.json \
+            --base-config config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json \
+            --out-dir .ads-online/generated \
+            --profile-root ./profiles \
+            --prefix "ga-ads-slot-${{ matrix.attempt }}" \
+            --count 1 \
+            --seed-mode derived \
+            --window-size 1920,1080 \
+            --chromium-version 146.0.7680.177
+          generated=$(find .ads-online/generated -maxdepth 1 -type f -name 'config.ctf.runtime.*.json' ! -name '*manifest*' | head -n1)
+          test -n "$generated"
+          cp "$generated" config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          ua = str((data.get("context") or {}).get("user_agent") or "")
+          args = [str(x) for x in ((data.get("cloakbrowser") or {}).get("args") or [])]
+          assert "Chrome/146.0.7680.177" in ua, ua
+          assert "--no-sandbox" not in args, args
+          assert str((data.get("ads_like_profile") or {}).get("source")) == "offline AdsPower profile JSON"
+          print(json.dumps({"ua": ua, "cloak_args": args, "seed": (data.get("ads_like_profile") or {}).get("seed")}, ensure_ascii=False))
+          PY
 
       - name: Start subscription proxy
         if: ${{ inputs.network_mode == 'proxy_pool' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
@@ -463,7 +514,7 @@ jobs:
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
               cmd=(./run_xvfb_natural_legacy_1920.sh)
-            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ]; then
+            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ]; then
               cmd=(./run_xvfb_natural_1920.sh)
             else
               cmd=(./run_xvfb_natural_1920.sh)
