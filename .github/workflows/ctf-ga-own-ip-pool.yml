@@ -68,6 +68,14 @@ on:
         description: "Stagger only probe-bound slots after denylist: delay=((attempt-1)%max_parallel)*seconds. Use 10-15 for speed, 30 for max isolation, 0 for concurrent."
         required: true
         default: "12"
+      coordinator_mode:
+        description: "Use the authenticated global coordinator after denylist. entry replaces local wave sleep with atomic cross-run entry reservations."
+        required: true
+        default: "off"
+        type: choice
+        options:
+          - off
+          - entry
       max_parallel:
         description: "Maximum simultaneous matrix jobs; also caps stagger wave width. Prefer 24-30 for faster fills when denylist is on."
         required: true
@@ -103,6 +111,8 @@ jobs:
       ADS_PROFILE_API_URL: ${{ secrets.ADS_PROFILE_API_URL }}
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       OUTLOOK_REAL_FINAL_PRIMARY_VARIANT: ${{ inputs.primary_final_variant }}
+      GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
+      GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -464,7 +474,7 @@ jobs:
           echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
 
       - name: Stagger live target entry
-        if: ${{ inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' && fromJSON(inputs.slot_stagger_seconds) > 0 }}
+        if: ${{ inputs.coordinator_mode == 'off' && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' && fromJSON(inputs.slot_stagger_seconds) > 0 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -478,6 +488,37 @@ jobs:
           delay=$(( wave * step ))
           echo "slot=$attempt wave=$wave max_parallel=$max_p stagger_seconds=$delay"
           sleep "$delay"
+
+      - name: Reserve globally coordinated live entry
+        if: ${{ inputs.coordinator_mode == 'entry' && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' }}
+        shell: bash
+        env:
+          GA_SLOT: ${{ matrix.attempt }}
+        run: |
+          set -euo pipefail
+          test -n "${GA_COORDINATOR_URL:-}"
+          test -n "${GA_COORDINATOR_TOKEN:-}"
+          mkdir -p Results/diagnostics
+          payload=$(python3 - <<'PY'
+          import json, os
+          print(json.dumps({
+              "stage": "entry",
+              "request_id": f"{os.environ['GITHUB_RUN_ID']}:{os.environ['GA_SLOT']}:entry",
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "slot": os.environ["GA_SLOT"],
+          }, separators=(",", ":")))
+          PY
+          )
+          response=$(curl -fsS --retry 4 --retry-all-errors --connect-timeout 8 --max-time 20 \
+            -A 'github-actions-ga-coordinator/1.0' \
+            -H "Authorization: Bearer ${GA_COORDINATOR_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "${GA_COORDINATOR_URL%/}/v1/reservations")
+          printf '%s\n' "$response" | tee Results/diagnostics/ga_coordinator_entry.json
+          wait_ms=$(python3 -c 'import json,sys,time; print(max(0,int(json.load(sys.stdin)["scheduled_at_ms"])-int(time.time()*1000)))' <<<"$response")
+          echo "coordinator_wait_ms=$wait_ms slot=$GA_SLOT"
+          python3 -c 'import sys,time; time.sleep(max(0,int(sys.argv[1]))/1000)' "$wait_ms"
 
       - name: Run no-proxy live probe on GA own IP
         if: ${{ steps.egress.outputs.should_probe != 'false' }}
