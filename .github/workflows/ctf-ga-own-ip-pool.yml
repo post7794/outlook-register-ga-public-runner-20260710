@@ -67,6 +67,10 @@ on:
         description: "Delay each matrix slot by (slot-1)*seconds before touching the target; use 0 for concurrent baseline"
         required: true
         default: "0"
+      max_parallel:
+        description: "Maximum simultaneous matrix jobs; use 1 to isolate long fresh-rechallenge sessions"
+        required: true
+        default: "20"
       stop_on_rechallenge:
         description: "Override historical wrapper to stop stale proof fallback when risk/verify requests a fresh HumanCaptcha"
         required: true
@@ -88,6 +92,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     strategy:
       fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         attempt: ${{ fromJSON(inputs.node_slots_json) }}
     env:
