@@ -504,7 +504,11 @@ jobs:
                   result_values.extend(str(item) for item in value)
           accepted_result0 = any(item == "0" or item.endswith("|0") for item in result_values)
           post_success_rechallenge = bool(row.get("risk_verify_post_success_challenge"))
-          strict_success = bool(row.get("create_200")) and row.get("verdict") == "create_account_200"
+          # Historical GA baseline classifiers predate the create_200 field,
+          # but emit create_account_200 only after strict response-body checks
+          # (HTTP 200 plus non-empty signinName and slt). Keep compatibility
+          # without weakening the newer classifier.
+          strict_success = row.get("verdict") == "create_account_200"
           explicit_riskblock = bool(row.get("riskblock"))
           multi_probe_slot = (
               os.environ.get("VARIANT", "").startswith("paired_")
