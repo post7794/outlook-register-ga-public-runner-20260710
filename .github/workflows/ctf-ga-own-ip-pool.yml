@@ -108,7 +108,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && 'ca162cd1b12930d0722ede1c50aa0a186e75d012' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && 'ed70cbc50027a1c377611ee658eb6cf6ceaf0c34' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -171,13 +171,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=ca162cd1b12930d0722ede1c50aa0a186e75d012
+          expected=ed70cbc50027a1c377611ee658eb6cf6ceaf0c34
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
           test -f tools/fetch_ads_profile_template.py
           test -f ads_like_cloak_profile_generator.py
           test -n "${ADS_PROFILE_API_URL:-}"
+          # Fresh-rechallenge isolation contract from P0 slot13 vs result0_rechallenge diffs.
+          controller="$(cat controllers/base_controller.py)"
+          echo "$controller" | grep -q 'fresh_rechallenge_isolation_reset'
+          echo "$controller" | grep -q 'synthetic_pt_markers'
+          ! echo "$controller" | grep -q 'pt_round=2&pt_ts='
 
       - name: System dependencies
         shell: bash
