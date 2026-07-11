@@ -103,9 +103,16 @@ jobs:
           set -euo pipefail
           expected=f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a
           actual=$(git rev-parse HEAD)
+          echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
-          grep -qx 'cloakbrowser==0.4.8' requirements.txt
-          test -x run_xvfb_natural_1920.sh || test -f run_xvfb_natural_1920.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          requirements = {
+              line.strip() for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+          }
+          assert "cloakbrowser==0.4.8" in requirements, sorted(requirements)
+          assert Path("run_xvfb_natural_1920.sh").is_file()
+          PY
           echo "historical_ga_success_source=$actual"
 
       - name: System dependencies
