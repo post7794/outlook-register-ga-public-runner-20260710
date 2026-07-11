@@ -24,6 +24,7 @@ on:
           - default
           - historical_ga_success_default
           - historical_ga_highrate_336a973
+          - historical_ga_fresh_rechallenge
           - semiprotocol_5s_stable
           - semiprotocol_5s_historical_firstpass
           - semiprotocol_5s_histfp_no_inject_knp
@@ -100,7 +101,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && 'c9ceb0fc8e4f74bd9ae1e5660ca2865f3e1fe82d' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -136,6 +137,19 @@ jobs:
           grep -Fxq 'cloakbrowser==0.4.8' requirements.txt
           test -f run_xvfb_natural_1920.sh
           echo "historical_ga_highrate_source=$(git rev-parse HEAD)"
+
+      - name: Verify fresh rechallenge source
+        if: ${{ inputs.variant == 'historical_ga_fresh_rechallenge' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=c9ceb0fc8e4f74bd9ae1e5660ca2865f3e1fe82d
+          actual=$(git rev-parse HEAD)
+          echo "expected=$expected actual=$actual"
+          test "$actual" = "$expected"
+          grep -Fxq 'cloakbrowser==0.4.8' requirements.txt
+          grep -q 'fresh_rechallenge_start' controllers/base_controller.py
+          grep -q 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
       - name: System dependencies
         shell: bash
@@ -436,7 +450,7 @@ jobs:
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
               cmd=(./run_xvfb_natural_legacy_1920.sh)
-            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ]; then
+            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ]; then
               cmd=(./run_xvfb_natural_1920.sh)
             else
               cmd=(./run_xvfb_natural_1920.sh)
