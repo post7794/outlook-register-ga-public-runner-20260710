@@ -65,13 +65,13 @@ on:
         required: false
         default: ""
       slot_stagger_seconds:
-        description: "Delay each matrix slot by (slot-1)*seconds before touching the target; use 0 for concurrent baseline"
+        description: "Stagger only probe-bound slots after denylist: delay=((attempt-1)%max_parallel)*seconds. Use 10-15 for speed, 30 for max isolation, 0 for concurrent."
         required: true
-        default: "0"
+        default: "12"
       max_parallel:
-        description: "Maximum simultaneous matrix jobs; use 1 to isolate long fresh-rechallenge sessions"
+        description: "Maximum simultaneous matrix jobs; also caps stagger wave width. Prefer 24-30 for faster fills when denylist is on."
         required: true
-        default: "20"
+        default: "24"
       stop_on_rechallenge:
         description: "Override historical wrapper to stop stale proof fallback when risk/verify requests a fresh HumanCaptcha"
         required: true
@@ -188,7 +188,63 @@ jobs:
             exit 1
           fi
 
+      # Capture egress + denylist BEFORE heavy setup/stagger so bad prefixes exit in ~1 min.
+      - name: Capture GA egress
+        id: egress
+        shell: bash
+        env:
+          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist }}
+        run: |
+          set -euxo pipefail
+          mkdir -p Results/diagnostics
+          ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+          export GA_PUBLIC_IP="$ip"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          data = {
+              "attempt": ${{ matrix.attempt }},
+              "variant": "${{ inputs.variant }}",
+              "network_mode": "${{ inputs.network_mode }}",
+              "runner": "${{ inputs.runner }}",
+              "runner_os": "${{ runner.os }}",
+              "runner_arch": "${{ runner.arch }}",
+              "public_ip": os.environ.get("GA_PUBLIC_IP", ""),
+              "egress_prefix_denylist": os.environ.get("EGRESS_PREFIX_DENYLIST", ""),
+          }
+          with open("Results/diagnostics/ga_egress.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          print(json.dumps(data, ensure_ascii=False))
+
+          ip = data.get("public_ip") or ""
+          raw = os.environ.get("EGRESS_PREFIX_DENYLIST", "")
+          prefixes = [p.strip() for p in raw.split(",") if p.strip()]
+          matched = ""
+          for prefix in prefixes:
+              token = prefix
+              if re.fullmatch(r"\d{1,3}", token):
+                  token += "."
+              if ip == token.rstrip(".") or ip.startswith(token):
+                  matched = prefix
+                  break
+          github_output = os.environ.get("GITHUB_OUTPUT")
+          if matched:
+              reason = f"egress_prefix_denylist matched prefix={matched} ip={ip}"
+              with open("Results/diagnostics/egress_skip.txt", "w", encoding="utf-8") as f:
+                  f.write(reason + "\n")
+              print(reason)
+              if github_output:
+                  with open(github_output, "a", encoding="utf-8") as f:
+                      f.write("should_probe=false\n")
+                      f.write(f"skip_reason={reason}\n")
+          elif github_output:
+              with open(github_output, "a", encoding="utf-8") as f:
+                  f.write("should_probe=true\n")
+          PY
+
       - name: System dependencies
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -204,6 +260,7 @@ jobs:
           fc-cache -f
 
       - name: Python environment
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -221,6 +278,7 @@ jobs:
           fi
 
       - name: Install Windows-like font family aliases
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -292,6 +350,7 @@ jobs:
           fc-match 'Calibri' | head -1
 
       - name: Normalize shell scripts
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -299,7 +358,7 @@ jobs:
           chmod +x run_xvfb_*.sh
 
       - name: Enable fresh HumanCaptcha rechallenge handling
-        if: ${{ inputs.stop_on_rechallenge == '1' }}
+        if: ${{ inputs.stop_on_rechallenge == '1' && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -308,7 +367,7 @@ jobs:
           grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
       - name: Fetch and apply online ADS fingerprint
-        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' }}
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -345,7 +404,7 @@ jobs:
           PY
 
       - name: Start subscription proxy
-        if: ${{ inputs.network_mode == 'proxy_pool' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
+        if: ${{ inputs.network_mode == 'proxy_pool' && steps.egress.outputs.should_probe != 'false' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
         shell: bash
         env:
           PROXY_SUBSCRIPTION_URL: ${{ env.CTF_PROXY_SUBSCRIPTION_URL }}
@@ -405,68 +464,20 @@ jobs:
           echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
 
       - name: Stagger live target entry
-        if: ${{ inputs.network_mode == 'ga_own_ip' && fromJSON(inputs.slot_stagger_seconds) > 0 }}
+        if: ${{ inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' && fromJSON(inputs.slot_stagger_seconds) > 0 }}
         shell: bash
         run: |
           set -euo pipefail
-          delay=$(( (${{ matrix.attempt }} - 1) * ${{ fromJSON(inputs.slot_stagger_seconds) }} ))
-          echo "slot=${{ matrix.attempt }} stagger_seconds=$delay"
+          # Wave stagger: only spread across max_parallel lanes so slot 36 does not
+          # wait (35 * stagger) after denylist already discarded many candidates.
+          attempt=${{ matrix.attempt }}
+          max_p=${{ fromJSON(inputs.max_parallel) }}
+          step=${{ fromJSON(inputs.slot_stagger_seconds) }}
+          if [ "$max_p" -lt 1 ]; then max_p=1; fi
+          wave=$(( (attempt - 1) % max_p ))
+          delay=$(( wave * step ))
+          echo "slot=$attempt wave=$wave max_parallel=$max_p stagger_seconds=$delay"
           sleep "$delay"
-
-      - name: Capture GA egress
-        id: egress
-        shell: bash
-        env:
-          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist }}
-        run: |
-          set -euxo pipefail
-          mkdir -p Results/diagnostics
-          ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
-          export GA_PUBLIC_IP="$ip"
-          python - <<'PY'
-          import json
-          import os
-          import re
-          data = {
-              "attempt": ${{ matrix.attempt }},
-              "variant": "${{ inputs.variant }}",
-              "network_mode": "${{ inputs.network_mode }}",
-              "runner": "${{ inputs.runner }}",
-              "runner_os": "${{ runner.os }}",
-              "runner_arch": "${{ runner.arch }}",
-              "public_ip": os.environ.get("GA_PUBLIC_IP", ""),
-              "egress_prefix_denylist": os.environ.get("EGRESS_PREFIX_DENYLIST", ""),
-          }
-          with open("Results/diagnostics/ga_egress.json", "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
-          print(json.dumps(data, ensure_ascii=False))
-
-          ip = data.get("public_ip") or ""
-          raw = os.environ.get("EGRESS_PREFIX_DENYLIST", "")
-          prefixes = [p.strip() for p in raw.split(",") if p.strip()]
-          matched = ""
-          for prefix in prefixes:
-              # Accept "20.", "20", "40.116.", or exact full IP style tokens.
-              token = prefix
-              if re.fullmatch(r"\d{1,3}", token):
-                  token += "."
-              if ip == token.rstrip(".") or ip.startswith(token):
-                  matched = prefix
-                  break
-          github_output = os.environ.get("GITHUB_OUTPUT")
-          if matched:
-              reason = f"egress_prefix_denylist matched prefix={matched} ip={ip}"
-              with open("Results/diagnostics/egress_skip.txt", "w", encoding="utf-8") as f:
-                  f.write(reason + "\n")
-              print(reason)
-              if github_output:
-                  with open(github_output, "a", encoding="utf-8") as f:
-                      f.write("should_probe=false\n")
-                      f.write(f"skip_reason={reason}\n")
-          elif github_output:
-              with open(github_output, "a", encoding="utf-8") as f:
-                  f.write("should_probe=true\n")
-          PY
 
       - name: Run no-proxy live probe on GA own IP
         if: ${{ steps.egress.outputs.should_probe != 'false' }}
