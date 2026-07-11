@@ -33,13 +33,13 @@ jobs:
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       # Pin the reviewed private-source snapshot. Do not replace this with a
       # mutable branch variable: otherwise OS and source change together.
-      PRIVATE_SOURCE_SHA: a0e13c00dcaa4a47ab8d40bcc30540bd519b51ce
+      PRIVATE_SOURCE_SHA: 00b68437e041cbdcee2be209a18d7a5592f4c2dd
     steps:
       - name: Checkout pinned private source
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: a0e13c00dcaa4a47ab8d40bcc30540bd519b51ce
+          ref: 00b68437e041cbdcee2be209a18d7a5592f4c2dd
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -151,7 +151,7 @@ jobs:
             "--time-warp-prewait-ms", "0",
             "--time-warp-pre-down-dwell-ms", "1200",
             "--time-warp-frame-scope", "challenge",
-            "--time-warp-attempts", "1",
+            "--time-warp-attempts", "2",
             "--time-warp-server-challenge-rounds", "8",
             "--time-warp-retry-visible-challenge-after-ms", "7000",
             "--time-warp-finished-stable-ms", "4500",
