@@ -22,6 +22,7 @@ on:
         type: choice
         options:
           - default
+          - historical_ga_success_default
           - semiprotocol_5s_stable
           - semiprotocol_5s_historical_firstpass
           - semiprotocol_5s_histfp_no_inject_knp
@@ -90,10 +91,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
+
+      - name: Verify historical GA success baseline
+        if: ${{ inputs.variant == 'historical_ga_success_default' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$expected"
+          grep -qx 'cloakbrowser==0.4.8' requirements.txt
+          test -x run_xvfb_natural_1920.sh || test -f run_xvfb_natural_1920.sh
+          echo "historical_ga_success_source=$actual"
 
       - name: System dependencies
         shell: bash
@@ -376,6 +389,8 @@ jobs:
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
               cmd=(./run_xvfb_natural_legacy_1920.sh)
+            elif [ "$variant" = "historical_ga_success_default" ]; then
+              cmd=(./run_xvfb_natural_1920.sh)
             else
               cmd=(./run_xvfb_natural_1920.sh)
             fi
