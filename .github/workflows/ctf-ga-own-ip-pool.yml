@@ -76,6 +76,7 @@ on:
         options:
           - off
           - entry
+          - entry_final
       max_parallel:
         description: "Maximum simultaneous matrix jobs; also caps stagger wave width. Prefer 24-30 for faster fills when denylist is on."
         required: true
@@ -113,12 +114,14 @@ jobs:
       OUTLOOK_REAL_FINAL_PRIMARY_VARIANT: ${{ inputs.primary_final_variant }}
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
+      GA_COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
+      GA_COORDINATOR_SLOT: ${{ matrix.attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && 'ed70cbc50027a1c377611ee658eb6cf6ceaf0c34' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '202390aefa4dba412de042ddc6ffcb808b22dc83' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -181,12 +184,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=ed70cbc50027a1c377611ee658eb6cf6ceaf0c34
+          expected=202390aefa4dba412de042ddc6ffcb808b22dc83
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
           test -f tools/fetch_ads_profile_template.py
           test -f ads_like_cloak_profile_generator.py
+          grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
           test -n "${ADS_PROFILE_API_URL:-}"
           # Fresh-rechallenge isolation contract from P0 slot13 vs result0_rechallenge diffs.
           # Grep the file directly. "echo "$huge" | grep -q" under pipefail can
@@ -490,7 +494,7 @@ jobs:
           sleep "$delay"
 
       - name: Reserve globally coordinated live entry
-        if: ${{ inputs.coordinator_mode == 'entry' && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' }}
+        if: ${{ (inputs.coordinator_mode == 'entry' || inputs.coordinator_mode == 'entry_final') && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         env:
           GA_SLOT: ${{ matrix.attempt }}
