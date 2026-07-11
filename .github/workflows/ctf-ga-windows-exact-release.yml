@@ -10,7 +10,7 @@ on:
       timeout_minutes:
         description: "Per-slot job timeout"
         required: true
-        default: "25"
+        default: "50"
       probe_timeout_minutes:
         description: "Live probe timeout; evidence is still encrypted and uploaded"
         required: true
@@ -33,13 +33,13 @@ jobs:
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       # Pin the reviewed private-source snapshot. Do not replace this with a
       # mutable branch variable: otherwise OS and source change together.
-      PRIVATE_SOURCE_SHA: 4623364d576a9c40042410411b6c01df86a7ef55
+      PRIVATE_SOURCE_SHA: a0e13c00dcaa4a47ab8d40bcc30540bd519b51ce
     steps:
       - name: Checkout pinned private source
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: 4623364d576a9c40042410411b6c01df86a7ef55
+          ref: a0e13c00dcaa4a47ab8d40bcc30540bd519b51ce
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -108,7 +108,7 @@ jobs:
           } | ConvertTo-Json | Set-Content Results\diagnostics\ga_egress.json -Encoding utf8
           Write-Host "GA_PUBLIC_IP=$ip"
 
-      - name: Run exact release 5s baseline
+      - name: Run exact release 5s baseline with one same-egress recovery retry
         id: live
         continue-on-error: true
         shell: pwsh
@@ -121,14 +121,10 @@ jobs:
           $ErrorActionPreference = "Continue"
           New-Item -ItemType Directory -Force -Path `
             Results\protocol_runtime, Results\network, Results\protocol_takeover, Results\diagnostics, profiles | Out-Null
-          $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-          $log = "Results\protocol_runtime\windows_release_5s_success_$stamp.log"
-          $privateConsole = "Results\diagnostics\windows_private_console_$stamp.log"
           $py = ".\.venv\Scripts\python.exe"
-          $probeArgs = @(
+          $baseProbeArgs = @(
             "protocol_runtime_probe.py",
             "--config", "config.release-5s-success-ga.json",
-            "--fresh-profile-prefix", "win-release-5s-success-$stamp",
             "--use-cloakbrowser",
             "--cloak-human-preset", "careful",
             "--mode", "time_warp_hold",
@@ -186,25 +182,93 @@ jobs:
             "--prehold-readiness-gate-ms", "1800"
           )
 
-          $privateError = "Results\diagnostics\windows_private_stderr_$stamp.log"
-          $process = Start-Process -FilePath $py -ArgumentList $probeArgs -WorkingDirectory $PWD.Path `
-            -RedirectStandardOutput $privateConsole -RedirectStandardError $privateError -PassThru
-          $finished = $process.WaitForExit([int]"${{ inputs.probe_timeout_minutes }}" * 60 * 1000)
-          if (-not $finished) {
-            # Kill the browser descendants too; otherwise locked profile files
-            # can prevent the evidence archive from being created.
-            & taskkill.exe /PID $process.Id /T /F *> $null
-            "probe_timeout" | Set-Content Results\diagnostics\probe_timeout.txt -Encoding utf8
-            $ec = 124
-          } else {
-            $ec = $process.ExitCode
+          function Invoke-ProbeRound([int]$round) {
+            $stamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+            $log = "Results\protocol_runtime\windows_release_5s_success_round${round}_$stamp.log"
+            $privateConsole = "Results\diagnostics\windows_private_console_round${round}_$stamp.log"
+            $privateError = "Results\diagnostics\windows_private_stderr_round${round}_$stamp.log"
+            # A different prefix guarantees a clean browser/profile state while
+            # retaining the same runner and therefore the same GA egress IP.
+            $probeArgs = @($baseProbeArgs) + @(
+              "--fresh-profile-prefix", "win-release-5s-success-r${round}-$stamp"
+            )
+            $process = Start-Process -FilePath $py -ArgumentList $probeArgs -WorkingDirectory $PWD.Path `
+              -RedirectStandardOutput $privateConsole -RedirectStandardError $privateError -PassThru
+            $finished = $process.WaitForExit([int]"${{ inputs.probe_timeout_minutes }}" * 60 * 1000)
+            if (-not $finished) {
+              # Kill browser descendants too; locked profile files otherwise
+              # prevent the encrypted evidence archive from being created.
+              & taskkill.exe /PID $process.Id /T /F *> $null
+              "probe_timeout" | Set-Content "Results\diagnostics\probe_timeout_round${round}.txt" -Encoding utf8
+              $ec = 124
+            } else {
+              $ec = $process.ExitCode
+            }
+            # Raw output may contain generated credentials. It remains only in
+            # Results and is consequently only published inside CMS evidence.
+            Get-Content $privateConsole, $privateError -ErrorAction SilentlyContinue |
+              Set-Content $log -Encoding utf8
+            return [int]$ec
           }
-          # The raw console can contain generated credentials. Keep it only in
-          # the encrypted Results bundle; never copy it into the public job log.
-          Get-Content $privateConsole, $privateError -ErrorAction SilentlyContinue |
-            Set-Content $log -Encoding utf8
+
+          $beforeRound1 = @(Get-ChildItem Results\network -Filter *.jsonl -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName })
+          $ec = Invoke-ProbeRound 1
+          $rounds = 1
+          $latest = Get-ChildItem Results\network -Filter *.jsonl -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notin $beforeRound1 } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $finalTrace = $latest
+          $round1Path = "Results\diagnostics\windows_round1_classification.json"
+          if ($latest) {
+            & $py classify_protocol_run.py $latest.FullName |
+              Set-Content $round1Path -Encoding utf8
+          }
+
+          $terminalRound1 = $false
+          $round1Verdict = "no_network_trace"
+          if (Test-Path $round1Path) {
+            try {
+              $row = Get-Content $round1Path -Raw | ConvertFrom-Json
+              $round1Verdict = [string]$row.verdict
+              $create200 = ($row.verdict -eq "create_account_200" -and $row.create_200 -eq $true)
+              $explicitRiskBlock = ($row.riskblock -eq $true)
+              # Only strict success or an explicit server riskBlock is terminal.
+              # result|0/rechallenge, stale DOB, score0/no-result0, expiredToken,
+              # button timeouts, and missing/invalid traces all get one clean
+              # full-flow retry on this same runner/IP.
+              $terminalRound1 = ($create200 -or $explicitRiskBlock)
+            } catch {
+              $round1Verdict = "classification_parse_error"
+            }
+          }
+
+          if (-not $terminalRound1) {
+            $rounds = 2
+            $beforeRound2 = @(Get-ChildItem Results\network -Filter *.jsonl -ErrorAction SilentlyContinue |
+              ForEach-Object { $_.FullName })
+            $ec = Invoke-ProbeRound 2
+            $finalTrace = Get-ChildItem Results\network -Filter *.jsonl -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -notin $beforeRound2 } |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          }
+
+          if ($finalTrace) {
+            $finalTrace.FullName | Set-Content Results\diagnostics\windows_final_trace_path.txt -Encoding utf8
+          } else {
+            Remove-Item Results\diagnostics\windows_final_trace_path.txt -ErrorAction SilentlyContinue
+          }
+
+          [ordered]@{
+            rounds_run = $rounds
+            round1_verdict = $round1Verdict
+            round1_terminal = $terminalRound1
+            retry_performed = ($rounds -eq 2)
+            final_exit_code = $ec
+          } | ConvertTo-Json | Set-Content Results\diagnostics\windows_retry_decision.json -Encoding utf8
           "exit_code=$ec" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "probe_exit_code=$ec"
+          "rounds_run=$rounds" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "probe_rounds=$rounds final_probe_exit_code=$ec"
 
       - name: Classify strict business result
         id: verdict
@@ -213,8 +277,14 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
           New-Item -ItemType Directory -Force -Path Results\diagnostics | Out-Null
-          $latest = Get-ChildItem Results\network -Filter *.jsonl -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $finalTracePointer = "Results\diagnostics\windows_final_trace_path.txt"
+          $latest = $null
+          if (Test-Path $finalTracePointer) {
+            $pointedPath = (Get-Content $finalTracePointer -Raw).Trim()
+            if (Test-Path -LiteralPath $pointedPath -PathType Leaf) {
+              $latest = Get-Item -LiteralPath $pointedPath
+            }
+          }
           $classificationPath = "Results\diagnostics\windows_strict_classification.json"
           if ($latest) {
             & .\.venv\Scripts\python.exe classify_protocol_run.py $latest.FullName |
@@ -272,6 +342,7 @@ jobs:
           "## Windows exact-release attempt ${{ matrix.attempt }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "source=$env:PRIVATE_SOURCE_SHA" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "probe_exit_code=${{ steps.live.outputs.exit_code }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "probe_rounds=${{ steps.live.outputs.rounds_run }}" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $safe = [ordered]@{
             verdict = $row.verdict
             create_200 = $row.create_200
