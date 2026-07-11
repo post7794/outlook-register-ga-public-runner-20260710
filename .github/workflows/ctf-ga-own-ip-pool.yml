@@ -66,6 +66,10 @@ on:
         description: "Delay each matrix slot by (slot-1)*seconds before touching the target; use 0 for concurrent baseline"
         required: true
         default: "0"
+      stop_on_rechallenge:
+        description: "Override historical wrapper to stop stale proof fallback when risk/verify requests a fresh HumanCaptcha"
+        required: true
+        default: "0"
       primary_final_variant:
         description: "Optional retry candidate promoted before the first real collector fetch"
         required: false
@@ -242,6 +246,15 @@ jobs:
           set -euxo pipefail
           sed -i 's/\r$//' run_xvfb_*.sh
           chmod +x run_xvfb_*.sh
+
+      - name: Enable fresh HumanCaptcha rechallenge handling
+        if: ${{ inputs.stop_on_rechallenge == '1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f run_xvfb_natural_1920.sh
+          sed -i 's/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=0/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1/' run_xvfb_natural_1920.sh
+          grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
       - name: Start subscription proxy
         if: ${{ inputs.network_mode == 'proxy_pool' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
