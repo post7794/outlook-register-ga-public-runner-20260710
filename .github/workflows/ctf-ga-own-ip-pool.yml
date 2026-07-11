@@ -317,6 +317,7 @@ jobs:
             --count 1 \
             --seed-mode derived \
             --window-size 1920,1080 \
+            --hold-retries 3 \
             --chromium-version 146.0.7680.177
           generated=$(find .ads-online/generated -maxdepth 1 -type f -name 'config.ctf.runtime.*.json' ! -name '*manifest*' | head -n1)
           test -n "$generated"
