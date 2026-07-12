@@ -26,6 +26,7 @@ on:
           - historical_ga_highrate_336a973
           - historical_ga_fresh_rechallenge
           - online_ads_ga_fresh_rechallenge
+          - online_ads_ga_fresh_rechallenge_oauth
           - offline_ads_like_ga_fresh_rechallenge
           - offline_ads_pool_ga_fresh_rechallenge
           - semiprotocol_5s_stable
@@ -124,7 +125,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge_oauth' && '64865f39acd32575895c4cb787041a9822c7ee47' || (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -209,6 +210,24 @@ jobs:
             echo "unexpected synthetic pt_round/pt_ts append still present" >&2
             exit 1
           fi
+
+      - name: Verify online ADS OAuth source
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge_oauth' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=64865f39acd32575895c4cb787041a9822c7ee47
+          actual=$(git rev-parse HEAD)
+          echo "expected=$expected actual=$actual"
+          test "$actual" = "$expected"
+          test -f oauth_stage2.py
+          test -f selftest_oauth_flow.py
+          test -f tools/fetch_ads_profile_template.py
+          test -f ads_like_cloak_profile_generator.py
+          grep -q 'run_oauth_stage2' protocol_runtime_probe.py
+          grep -q 'last_registered_email' controllers/base_controller.py
+          python3 selftest_oauth_flow.py
+          test -n "${ADS_PROFILE_API_URL:-}"
 
       - name: Verify offline ADS-like source
         if: ${{ inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' }}
@@ -438,7 +457,7 @@ jobs:
           grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
       - name: Fetch and apply online ADS fingerprint
-        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' && steps.egress.outputs.should_probe != 'false' }}
+        if: ${{ (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_fresh_rechallenge_oauth') && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -472,6 +491,36 @@ jobs:
           assert "--no-sandbox" not in args, args
           assert str((data.get("ads_like_profile") or {}).get("source")) == "offline AdsPower profile JSON"
           print(json.dumps({"ua": ua, "cloak_args": args, "seed": (data.get("ads_like_profile") or {}).get("seed")}, ensure_ascii=False))
+          PY
+
+      - name: Enable best-effort Outlook OAuth stage2
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge_oauth' && steps.egress.outputs.should_probe != 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          data["oauth2"] = {
+              "enable_oauth2": True,
+              "client_id": "6daa9f56-5e67-4cb6-ae52-ef89ef912d36",
+              "redirect_url": "http://localhost:8080",
+              "authority": "consumers",
+              "max_retries": 2,
+              "timeout_seconds": 30,
+              "Scopes": [
+                  "offline_access",
+                  "https://outlook.office.com/IMAP.AccessAsUser.All",
+                  "https://outlook.office.com/SMTP.Send",
+              ],
+          }
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+          assert data["oauth2"]["enable_oauth2"] is True
+          assert len(data["oauth2"]["Scopes"]) == 3
+          print("oauth_stage2=best_effort scopes=imap_smtp")
           PY
 
       - name: Apply offline ADS profile-pool fingerprint
@@ -677,7 +726,7 @@ jobs:
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
               cmd=(./run_xvfb_natural_legacy_1920.sh)
-            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
+            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge_oauth" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
               cmd=(./run_xvfb_natural_1920.sh)
             else
               cmd=(./run_xvfb_natural_1920.sh)
@@ -766,6 +815,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
           def load_json(path):
@@ -831,6 +881,25 @@ jobs:
               else:
                   reason = str(row.get("verdict") or "unclassified_failure")
 
+          oauth_requested = os.environ.get("VARIANT", "") == "online_ads_ga_fresh_rechallenge_oauth"
+          oauth_status = "disabled"
+          oauth_reason = "disabled"
+          if oauth_requested:
+              oauth_status = "not_run"
+              oauth_reason = "registration_not_strict" if not strict_success else "status_not_recorded"
+              oauth_path = Path("Results/oauth_status.jsonl")
+              if oauth_path.exists():
+                  try:
+                      lines = [line for line in oauth_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                      oauth_row = json.loads(lines[-1]) if lines else {}
+                  except Exception:
+                      oauth_row = {}
+                  candidate_status = str(oauth_row.get("status") or "")
+                  if candidate_status in {"success", "pending"}:
+                      oauth_status = candidate_status
+                  candidate_reason = str(oauth_row.get("error_code") or ("ok" if oauth_status == "success" else "unknown"))
+                  oauth_reason = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", candidate_reason)[:96] or "unknown"
+
           # Keep this artifact public-safe: no IP, email, account fields, URLs,
           # filenames, proxy names, raw errors, request bodies, or log excerpts.
           safe = {
@@ -850,6 +919,9 @@ jobs:
               "human_success": int(row.get("human_success") or 0),
               "create_request": bool(row.get("create_request")),
               "probe_timed_out": timed_out,
+              "oauth_requested": oauth_requested,
+              "oauth_status": oauth_status,
+              "oauth_reason": oauth_reason,
           }
           out = Path("public-safe-verdict") / f"verdict-{safe['attempt']}.json"
           out.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
