@@ -85,9 +85,9 @@ on:
           - entry_final
           - final_only
       max_parallel:
-        description: "Maximum simultaneous matrix jobs; also caps stagger wave width. Prefer 24-30 for faster fills when denylist is on."
+        description: "Maximum simultaneous matrix jobs; 20 is the verified sweet point with final_only and a 15s coordinator gap."
         required: true
-        default: "24"
+        default: "20"
       stop_on_rechallenge:
         description: "Override historical wrapper to stop stale proof fallback when risk/verify requests a fresh HumanCaptcha"
         required: true
