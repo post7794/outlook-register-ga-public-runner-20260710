@@ -54,6 +54,10 @@ on:
         description: "Live probe timeout inside each job; timed-out bad IPs still upload evidence"
         required: true
         default: "12"
+      fresh_no_progress_timeout_seconds:
+        description: "Stop a fresh-rechallenge hold attempt after this many seconds without semantic collector/HumanCaptcha progress; 0 disables"
+        required: true
+        default: "60"
       per_ip_max_registrations:
         description: "Repeat successful registrations on the same GA egress IP until first non-success, capped here. Use 1 for legacy one-shot probing."
         required: true
@@ -124,7 +128,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '33546b04aa9c72c9c83f77cbec6d89bc37fa48a8' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -187,7 +191,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=0838ef3a52c6eb337b0847762757d282b36b9e5e
+          expected=33546b04aa9c72c9c83f77cbec6d89bc37fa48a8
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
@@ -199,6 +203,12 @@ jobs:
           grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py
           grep -q 'fresh_rechallenge_hold_budget' controllers/base_controller.py
           grep -q 'FRESH_BARE_SENSOR' controllers/base_controller.py
+          grep -q 'FRESH_NO_PROGRESS_TIMEOUT_SECONDS' controllers/base_controller.py
+          grep -q 'fresh_rechallenge_idle_timeout' controllers/base_controller.py
+          grep -q '_protocol_takeover_fresh_idle_check' controllers/patchright_controller.py
+          test -f controllers/fresh_rechallenge_watchdog.py
+          test -f tests/test_fresh_rechallenge_watchdog.py
+          python3 -m unittest tests.test_fresh_rechallenge_watchdog
           test -n "${ADS_PROFILE_API_URL:-}"
           # Fresh-rechallenge isolation contract from P0 slot13 vs result0_rechallenge diffs.
           # Grep the file directly. "echo "$huge" | grep -q" under pipefail can
@@ -627,6 +637,7 @@ jobs:
         shell: bash
         env:
           OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS: ${{ inputs.pre_first_hold_warmup_ms }}
+          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_NO_PROGRESS_TIMEOUT_SECONDS: ${{ inputs.fresh_no_progress_timeout_seconds }}
         run: |
           set +e
           mkdir -p Results/diagnostics
@@ -637,6 +648,7 @@ jobs:
           echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
           variant="${{ inputs.variant }}"
           echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
+          echo "fresh_no_progress_timeout_seconds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_NO_PROGRESS_TIMEOUT_SECONDS}"
           if [ "$variant" = "paired_5s_then_thin" ] || [ "$variant" = "paired_thin_then_5s" ]; then
             if [ "${{ inputs.per_ip_max_registrations }}" -ne 1 ]; then
               echo "paired variants require per_ip_max_registrations=1" >&2
@@ -701,7 +713,7 @@ jobs:
           fi
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
           echo "public_safe_probe_summary:"
-          grep -E "\[PUBLIC_AB\]|outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out" "$private_console" 2>/dev/null \
+          grep -E "\[PUBLIC_AB\]|outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out|fresh rechallenge no progress|fresh rechallenge idle timeout" "$private_console" 2>/dev/null \
             | sed -E 's/[[:alnum:]._%+-]+@(outlook|hotmail)\.com/<redacted-email>/g' \
             | tail -40 || true
           # Matrix attempts are allowed to fail individually. The summarize job
@@ -777,6 +789,9 @@ jobs:
           row = load_json("/tmp/private_classification.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
+          fresh_idle_timed_out = Path(
+              "Results/diagnostics/fresh_rechallenge_idle_timeout.jsonl"
+          ).exists()
 
           result_values = []
           for key in ("network_collector_results", "route_collector_results", "route_merged_results"):
@@ -814,6 +829,12 @@ jobs:
           elif explicit_riskblock:
               category = "ip_riskblock"
               reason = "explicit_riskblock"
+          elif accepted_result0 and fresh_idle_timed_out:
+              category = "technical_failure"
+              reason = "collector_result0_then_fresh_idle_timeout"
+          elif fresh_idle_timed_out:
+              category = "technical_failure"
+              reason = "fresh_idle_timeout_before_accepted_checkpoint"
           elif accepted_result0 and post_success_rechallenge:
               # A repeated challenge is not evidence of an IP block. Keep it
               # visible as a post-proof technical outcome instead of turning a
@@ -846,6 +867,7 @@ jobs:
               "explicit_riskblock": explicit_riskblock,
               "accepted_result0": accepted_result0,
               "post_success_rechallenge": post_success_rechallenge,
+              "fresh_rechallenge_idle_timed_out": fresh_idle_timed_out,
               "human_loaded": int(row.get("human_loaded") or 0),
               "human_success": int(row.get("human_success") or 0),
               "create_request": bool(row.get("create_request")),
