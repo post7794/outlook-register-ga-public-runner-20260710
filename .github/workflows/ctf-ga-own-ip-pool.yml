@@ -26,6 +26,7 @@ on:
           - historical_ga_highrate_336a973
           - historical_ga_fresh_rechallenge
           - online_ads_ga_fresh_rechallenge
+          - online_ads_ga_5s_hold_transplant
           - offline_ads_like_ga_fresh_rechallenge
           - offline_ads_pool_ga_fresh_rechallenge
           - semiprotocol_5s_stable
@@ -128,7 +129,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '87aed0fc6d95ccb49465dccc83a7fa54050f61e6' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -187,11 +188,15 @@ jobs:
           PY
 
       - name: Verify online ADS source
-        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' }}
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_5s_hold_transplant' }}
         shell: bash
         run: |
           set -euo pipefail
-          expected=31dfe0e28e5da13645a455dba6737c19346faf63
+          if [ "${{ inputs.variant }}" = "online_ads_ga_5s_hold_transplant" ]; then
+            expected=87aed0fc6d95ccb49465dccc83a7fa54050f61e6
+          else
+            expected=31dfe0e28e5da13645a455dba6737c19346faf63
+          fi
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
@@ -200,6 +205,12 @@ jobs:
           grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
           grep -q 'minimal_natural_hold' protocol_runtime_probe.py
           grep -q -- '--final-proof-normalizer minimal_natural_hold' run_xvfb_natural_1920.sh
+          if [ "${{ inputs.variant }}" = "online_ads_ga_5s_hold_transplant" ]; then
+            test -f run_xvfb_natural_5s_transplant_1920.sh
+            grep -q -- '--time-warp-wall-ms 6500' run_xvfb_natural_5s_transplant_1920.sh
+            grep -q -- '--final-proof-normalizer minimal_natural_hold' run_xvfb_natural_5s_transplant_1920.sh
+            grep -q -- '--disable-synthetic-u0' run_xvfb_natural_5s_transplant_1920.sh
+          fi
           grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py
           grep -q 'fresh_rechallenge_hold_budget' controllers/base_controller.py
           grep -q 'FRESH_BARE_SENSOR' controllers/base_controller.py
@@ -451,7 +462,7 @@ jobs:
           grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
       - name: Fetch and apply online ADS fingerprint
-        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' && steps.egress.outputs.should_probe != 'false' }}
+        if: ${{ (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_5s_hold_transplant') && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -692,6 +703,8 @@ jobs:
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
               cmd=(./run_xvfb_natural_legacy_1920.sh)
+            elif [ "$variant" = "online_ads_ga_5s_hold_transplant" ]; then
+              cmd=(./run_xvfb_natural_5s_transplant_1920.sh)
             elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
               cmd=(./run_xvfb_natural_1920.sh)
             else
