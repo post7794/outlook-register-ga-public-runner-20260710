@@ -27,6 +27,7 @@ on:
           - historical_ga_fresh_rechallenge
           - online_ads_ga_fresh_rechallenge
           - offline_ads_like_ga_fresh_rechallenge
+          - offline_ads_pool_ga_fresh_rechallenge
           - semiprotocol_5s_stable
           - semiprotocol_5s_historical_firstpass
           - semiprotocol_5s_histfp_no_inject_knp
@@ -123,7 +124,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_like_ga_fresh_rechallenge') && 'f86f83fd268efe50003e6ba017e538c36b92e476' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -186,7 +187,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=f86f83fd268efe50003e6ba017e538c36b92e476
+          expected=0838ef3a52c6eb337b0847762757d282b36b9e5e
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
@@ -214,7 +215,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=f86f83fd268efe50003e6ba017e538c36b92e476
+          expected=0838ef3a52c6eb337b0847762757d282b36b9e5e
           actual=$(git rev-parse HEAD)
           echo "expected=$expected actual=$actual"
           test "$actual" = "$expected"
@@ -235,6 +236,28 @@ jobs:
           grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
           grep -q 'minimal_natural_hold' protocol_runtime_probe.py
           grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py
+
+      - name: Verify offline ADS profile pool source
+        if: ${{ inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=0838ef3a52c6eb337b0847762757d282b36b9e5e
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$expected"
+          test -f config.ads_offline_profile_pool.json
+          test -f tools/fetch_ads_profile_template.py
+          python3 - <<'PY'
+          import json
+          data = json.load(open('config.ads_offline_profile_pool.json', encoding='utf-8'))
+          assert len(data.get('profiles') or []) >= 20
+          text = json.dumps(data, ensure_ascii=False).lower()
+          for forbidden in ('cookie', 'password', 'user_proxy_config', 'proxy_password', 'login_cookie'):
+              assert forbidden not in text, forbidden
+          print({'offline_profile_count': len(data['profiles'])})
+          PY
+          grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
+          grep -q 'minimal_natural_hold' protocol_runtime_probe.py
 
       # Capture egress + denylist BEFORE heavy setup/stagger so bad prefixes exit in ~1 min.
       - name: Capture GA egress
@@ -451,6 +474,45 @@ jobs:
           print(json.dumps({"ua": ua, "cloak_args": args, "seed": (data.get("ads_like_profile") or {}).get("seed")}, ensure_ascii=False))
           PY
 
+      - name: Apply offline ADS profile-pool fingerprint
+        if: ${{ inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge' && steps.egress.outputs.should_probe != 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ads-offline/generated Results/diagnostics
+          python3 tools/fetch_ads_profile_template.py \
+            --offline-pool config.ads_offline_profile_pool.json \
+            --slot "${{ matrix.attempt }}" \
+            --out .ads-offline/profile.json | tee Results/diagnostics/ads_offline_select.json
+          python3 ads_like_cloak_profile_generator.py \
+            --source-json .ads-offline/profile.json \
+            --base-config config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json \
+            --out-dir .ads-offline/generated \
+            --profile-root ./profiles \
+            --prefix "ga-offline-ads-slot-${{ matrix.attempt }}" \
+            --count 1 \
+            --seed-mode derived \
+            --window-size 1920,1080 \
+            --hold-retries 3 \
+            --chromium-version 146.0.7680.177
+          generated=$(find .ads-offline/generated -maxdepth 1 -type f -name 'config.ctf.runtime.*.json' ! -name '*manifest*' | head -n1)
+          test -n "$generated"
+          cp "$generated" config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json
+          python3 - <<'PY'
+          import json
+          p = 'config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json'
+          data = json.load(open(p, encoding='utf-8'))
+          ua = str((data.get('context') or {}).get('user_agent') or '')
+          args = [str(x) for x in ((data.get('cloakbrowser') or {}).get('args') or [])]
+          ads = data.get('ads_like_profile') or {}
+          seeds = [x.split('=', 1)[1] for x in args if x.startswith('--fingerprint=')]
+          assert 'Chrome/146.0.7680.177' in ua, ua
+          assert '--no-sandbox' not in args, args
+          assert len(seeds) == 1 and len(seeds[0]) == 5, seeds
+          assert ads.get('source') == 'offline AdsPower profile JSON', ads
+          print(json.dumps({'ua': ua, 'seed': seeds[0], 'source': ads.get('source')}, ensure_ascii=False))
+          PY
+
       - name: Start subscription proxy
         if: ${{ inputs.network_mode == 'proxy_pool' && steps.egress.outputs.should_probe != 'false' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
         shell: bash
@@ -546,6 +608,7 @@ jobs:
               "slot": os.environ["GA_SLOT"],
           }, separators=(",", ":")))
           PY
+
           )
           response=$(curl -fsS --retry 4 --retry-all-errors --connect-timeout 8 --max-time 20 \
             -A 'github-actions-ga-coordinator/1.0' \
@@ -614,7 +677,7 @@ jobs:
               cmd=(./run_xvfb_ui_natural_1920.sh)
             elif [ "$variant" = "natural_legacy" ]; then
               cmd=(./run_xvfb_natural_legacy_1920.sh)
-            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ]; then
+            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
               cmd=(./run_xvfb_natural_1920.sh)
             else
               cmd=(./run_xvfb_natural_1920.sh)
