@@ -76,7 +76,7 @@ on:
         default: "off"
         type: choice
         options:
-          - off
+          - "off"
           - entry
           - entry_final
           - final_only
