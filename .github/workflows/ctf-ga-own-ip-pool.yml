@@ -846,7 +846,7 @@ jobs:
           ok = http_code.isdigit() and 200 <= int(http_code) < 300 and row.get('success') is True
           allowed_error_codes = {
               'input_invalid', 'oauth_failed', 'token_validation_failed',
-              'imap_probe_failed', 'platform_config_error',
+              'imap_probe_failed', 'graph_probe_failed', 'platform_config_error',
           }
           error_code = str(row.get('error_code') or '')
           if error_code not in allowed_error_codes:
