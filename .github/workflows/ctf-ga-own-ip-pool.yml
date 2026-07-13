@@ -613,6 +613,60 @@ jobs:
           echo "slot=$attempt wave=$wave max_parallel=$max_p stagger_seconds=$delay"
           sleep "$delay"
 
+      - name: Record sanitized registration browser environment
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
+        shell: bash
+        env:
+          GA_SLOT: ${{ matrix.attempt }}
+          GA_VARIANT: ${{ inputs.variant }}
+          GA_NETWORK_MODE: ${{ inputs.network_mode }}
+          GA_PUBLIC_IP: ${{ env.GA_PUBLIC_IP }}
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          python3 - <<'PY'
+          import hashlib
+          import importlib.metadata
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          source = Path('config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json')
+          data = json.loads(source.read_text(encoding='utf-8'))
+          context = dict(data.get('context') or {})
+          cloak = dict(data.get('cloakbrowser') or {})
+          manifest = {
+              # This is intentionally a launchable, non-secret subset of the
+              # exact config. It contains no profile directory, AdsPower ID,
+              # cookie, proxy credential, or account identifier.
+              'context': context,
+              'cloakbrowser': cloak,
+              'patchright': {'use_cloakbrowser': bool((data.get('patchright') or {}).get('use_cloakbrowser'))},
+              'proxy': '',
+              'recovery_provenance': {
+                  'schema': 1,
+                  'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                  'slot': os.environ.get('GA_SLOT', ''),
+                  'variant': os.environ.get('GA_VARIANT', ''),
+                  'network_mode': os.environ.get('GA_NETWORK_MODE', ''),
+                  'xvfb_screen': '2560x1440x24',
+                  'cloakbrowser_version': importlib.metadata.version('cloakbrowser'),
+                  'source_config_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+                  # Keep egress comparable without persisting an address in
+                  # the artifact; a proxy itself must be supplied separately.
+                  'egress_sha256': hashlib.sha256(os.environ.get('GA_PUBLIC_IP', '').encode()).hexdigest(),
+                  'proxy_was_configured': bool(data.get('proxy')) or bool(os.environ.get('OUTLOOK_PROXY_URL')),
+              },
+          }
+          out = Path('Results/diagnostics/registration_browser_env.json')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+          # Safe confirmation only; do not print headers, UA, fingerprints, or
+          # any persistent-profile data into the public runner log.
+          print(json.dumps({'recorded': True, 'schema': 1, 'proxy_was_configured': manifest['recovery_provenance']['proxy_was_configured']}))
+          PY
+
       - name: Reserve globally coordinated live entry
         if: ${{ (inputs.coordinator_mode == 'entry' || inputs.coordinator_mode == 'entry_final') && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
@@ -904,6 +958,7 @@ jobs:
                   return {}
 
           row = load_json("/tmp/private_classification.json")
+          ingest = load_json("Results/diagnostics/outlook_email_ingest.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
           fresh_absolute_timed_out = Path(
@@ -926,6 +981,30 @@ jobs:
           # without weakening the newer classifier.
           strict_success = row.get("verdict") == "create_account_200"
           explicit_riskblock = bool(row.get("riskblock"))
+          # A successful CreateAccount response only establishes that the
+          # mailbox was created.  It does not establish that Microsoft will
+          # issue a usable OAuth/Graph token afterwards (service-abuse mode is
+          # the concrete counterexample).  Keep the protocol verdict intact
+          # for experiment comparability, but expose the post-create account
+          # lifecycle separately so dashboards and batch counts cannot equate
+          # "strict_success" with a usable mailbox.
+          graph_import_attempted = bool(ingest.get("attempted"))
+          graph_import_ok = ingest.get("success") is True
+          graph_import_error = str(ingest.get("error_code") or "")
+          allowed_ingest_errors = {
+              "input_invalid", "oauth_failed", "token_validation_failed",
+              "imap_probe_failed", "graph_probe_failed", "platform_config_error",
+          }
+          if graph_import_error not in allowed_ingest_errors:
+              graph_import_error = None
+          if not strict_success:
+              account_lifecycle = "not_created"
+          elif graph_import_ok:
+              account_lifecycle = "graph_healthy"
+          elif graph_import_attempted:
+              account_lifecycle = "created_graph_unhealthy"
+          else:
+              account_lifecycle = "created_graph_unverified"
           multi_probe_slot = (
               os.environ.get("VARIANT", "").startswith("paired_")
               or os.environ.get("PER_IP_MAX_REGISTRATIONS", "1") != "1"
@@ -990,6 +1069,10 @@ jobs:
               "category": category,
               "reason": reason,
               "strict_success": strict_success,
+              "account_lifecycle": account_lifecycle,
+              "graph_import_attempted": graph_import_attempted,
+              "graph_import_ok": graph_import_ok,
+              "graph_import_error_code": graph_import_error,
               "explicit_riskblock": explicit_riskblock,
               "accepted_result0": accepted_result0,
               "post_success_rechallenge": post_success_rechallenge,
