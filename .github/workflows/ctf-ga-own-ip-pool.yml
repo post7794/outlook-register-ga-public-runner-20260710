@@ -818,7 +818,7 @@ jobs:
           Path(os.environ['REQUEST_FILE']).write_text(json.dumps({
               'email': email.strip(),
               'password': password,
-              'mode': 'imap',
+              'mode': 'graph',
               'remark': 'ga-run-${{ github.run_id }}-slot-${{ matrix.attempt }}',
           }), encoding='utf-8')
           PY
@@ -1163,4 +1163,3 @@ jobs:
           # decisive checkpoint, or when any non-IP technical failure remains.
           sys.exit(0 if goal_met else 1)
           PY
-
