@@ -1,0 +1,203 @@
+name: Build GA precompiled runtime cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache_revision:
+        description: "Immutable cache revision; bump instead of overwriting an existing cache"
+        required: true
+        default: "v1"
+      runner:
+        description: "Runner image that must match the consuming workflow"
+        required: true
+        default: "ubuntu-22.04"
+        type: choice
+        options:
+          - ubuntu-22.04
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  build-runtime:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 25
+    env:
+      CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
+      RUNTIME_FONT_DIR: ${{ github.workspace }}/.ga-runtime-fonts
+    steps:
+      - name: Checkout public runner recipe
+        uses: actions/checkout@v4
+
+      - name: Restore immutable runtime cache
+        id: runtime-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .venv
+            ~/.cloakbrowser
+            ~/.local/share/fonts/ga-runtime
+          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-py310-cloak048
+
+      - name: Install build-only font packages
+        if: ${{ steps.runtime-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fontconfig fonts-liberation fonts-noto fonts-noto-cjk \
+            fonts-crosextra-carlito fonts-crosextra-caladea
+          sudo apt-get install -y --no-install-recommends fonts-selawik || true
+          sudo add-apt-repository -y multiverse || true
+          sudo apt-get update || true
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+            | sudo debconf-set-selections || true
+          sudo apt-get install -y --no-install-recommends ttf-mscorefonts-installer || true
+
+      - name: Build pinned Python and Cloak runtime
+        if: ${{ steps.runtime-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.10"
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r config/ga-runtime-requirements.txt
+          python -m cloakbrowser install
+          test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+
+      - name: Build portable user-font tree
+        if: ${{ steps.runtime-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          . .venv/bin/activate
+          out="$HOME/.local/share/fonts/ga-runtime"
+          rm -rf "$out"
+          mkdir -p "$out/system" "$out/windows-ctf"
+          copy_fonts() {
+            src="$1"
+            dst="$2"
+            if [ -d "$src" ]; then
+              mkdir -p "$out/system/$dst"
+              cp -a "$src"/. "$out/system/$dst"/
+            fi
+          }
+          copy_fonts /usr/share/fonts/truetype/crosextra crosextra
+          copy_fonts /usr/share/fonts/truetype/msttcorefonts msttcorefonts
+          copy_fonts /usr/share/fonts/opentype/noto noto-opentype
+          copy_fonts /usr/share/fonts/truetype/noto noto-truetype
+          copy_fonts /usr/share/fonts/truetype/selawik selawik
+
+          python - <<'PY'
+          from fontTools.ttLib import TTFont
+          from pathlib import Path
+
+          system = Path.home() / '.local/share/fonts/ga-runtime/system'
+          out = Path.home() / '.local/share/fonts/ga-runtime/windows-ctf'
+          out.mkdir(parents=True, exist_ok=True)
+
+          def first(*patterns):
+              for pattern in patterns:
+                  hits = sorted(system.glob(pattern))
+                  if hits:
+                      return hits[0]
+              return None
+
+          default_src = first(
+              'msttcorefonts/Arial.ttf',
+              'crosextra/Carlito-Regular.ttf',
+          ) or Path('/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf')
+          selawik_src = first('selawik/Selawik.ttf', 'selawik/Selawik-Regular.ttf') or default_src
+          calibri_src = first('crosextra/Carlito-Regular.ttf', 'msttcorefonts/Arial.ttf') or default_src
+          cambria_src = first('crosextra/Caladea-Regular.ttf') or calibri_src
+          msgothic_src = first(
+              'noto-opentype/NotoSansCJK-Regular.ttc',
+              'noto-truetype/NotoSansCJK-Regular.ttc',
+          ) or default_src
+          if not default_src.exists():
+              raise SystemExit('no portable base font found')
+
+          def set_name(font, name_id, value):
+              font['name'].setName(value, name_id, 3, 1, 0x409)
+              font['name'].setName(value, name_id, 1, 0, 0)
+
+          families = [
+              ('Segoe UI', 'Regular', selawik_src),
+              ('Segoe UI Light', 'Regular', selawik_src),
+              ('Calibri', 'Regular', calibri_src),
+              ('Cambria', 'Regular', cambria_src),
+              ('Marlett', 'Regular', default_src),
+              ('MS UI Gothic', 'Regular', msgothic_src),
+              ('Franklin Gothic', 'Regular', default_src),
+          ]
+          for family, subfamily, src in families:
+              try:
+                  font = TTFont(str(src))
+              except Exception as exc:
+                  if exc.__class__.__name__ == 'TTLibFileIsCollectionError':
+                      font = TTFont(str(src), fontNumber=0)
+                  else:
+                      raise
+              full = f'{family} {subfamily}'
+              ps = ''.join(ch for ch in full if ch.isalnum())
+              set_name(font, 1, family)
+              set_name(font, 2, subfamily)
+              set_name(font, 4, full)
+              set_name(font, 6, ps)
+              set_name(font, 16, family)
+              set_name(font, 17, subfamily)
+              font.save(str(out / f'{ps}.ttf'))
+          PY
+          fc-cache -f "$out"
+
+      - name: Validate runtime before publishing cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          . .venv/bin/activate
+          python - <<'PY'
+          import importlib.metadata as md
+          expected = {
+              'cloakbrowser': '0.4.8',
+              'playwright': '1.53.0',
+              'patchright': '1.61.2',
+          }
+          for package, wanted in expected.items():
+              actual = md.version(package)
+              print(f'{package}={actual}')
+              if actual != wanted:
+                  raise SystemExit(f'{package}: expected {wanted}, got {actual}')
+          PY
+          chrome=$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)
+          test -x "$chrome"
+          "$chrome" --version
+          test -d "$HOME/.local/share/fonts/ga-runtime"
+          fc-cache -f "$HOME/.local/share/fonts/ga-runtime"
+          fc-match 'Segoe UI' | head -1
+          fc-match 'Calibri' | head -1
+
+      - name: Save immutable runtime cache
+        if: ${{ steps.runtime-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .venv
+            ~/.cloakbrowser
+            ~/.local/share/fonts/ga-runtime
+          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-py310-cloak048
+
+      - name: Report cache result
+        shell: bash
+        run: |
+          {
+            echo "### GA runtime cache"
+            echo
+            echo "- key: \`${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-py310-cloak048\`"
+            echo "- restored: \`${{ steps.runtime-cache.outputs.cache-hit == 'true' }}\`"
+            echo "- browser: \`$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome | tail -1)\`"
+            echo "- size: \`$(du -sh .venv "$HOME/.cloakbrowser" "$HOME/.local/share/fonts/ga-runtime" | awk '{s=s $1 " "; p=p $2 " ";} END {print s "(" p ")"}')\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -14,7 +14,10 @@
 ## 工作流
 
 - `Verify private source access`：只验证私人源码能否读取，不执行 live。
-- `CTF GA own IP pool probe`：从私人仓库检出源码后执行现有 GA matrix 测试。
+- `Build GA precompiled runtime cache`：一次性构建无密钥的 Python/Cloak/字体运行时 cache。
+- `CTF GA own IP pool probe`：从私人仓库检出源码后执行现有 GA matrix 测试；支持 `legacy` / `prebuilt` 环境。
+
+预构建说明见 `docs/GA_PRECOMPILED_RUNTIME.md`。
 
 ## 当前私人源码配置
 

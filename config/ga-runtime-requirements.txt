@@ -1,0 +1,10 @@
+# Precompiled GA runtime lock for ubuntu-22.04 / Python 3.10.
+# Bump runtime_cache_revision whenever this file or the font/browser recipe changes.
+faker==40.31.0
+requests==2.34.2
+playwright==1.53.0
+patchright==1.61.2
+cloakbrowser==0.4.8
+cryptography==49.0.0
+fonttools==4.63.0
+PyYAML==6.0.3
