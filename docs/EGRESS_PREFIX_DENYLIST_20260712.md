@@ -1,4 +1,24 @@
-# GA egress prefix denylist (2026-07-12)
+# GA egress prefix denylist (updated 2026-07-15)
+
+## 2026-07-15 high-N refresh
+
+The decrypted 100-slot runs `29338532443` and `29347583690` add 200 joined
+egress/outcome samples. The newly rejected ranges remained at zero strict
+success:
+
+| prefix | n | strict | entry riskBlock | post-proof riskBlock | technical |
+|--------|--:|-------:|----------------:|---------------------:|----------:|
+| 4. | 10 | 0 | 9 | 1 | 0 |
+| 13. | 3 | 0 | 3 | 0 | 0 |
+| 40. | 8 | 0 | 8 | 0 | 0 |
+| 68. | 7 | 0 | 5 | 1 | 1 |
+
+Across the two runs, the old `20.,52.` policy admitted 110 probes: 56 strict
+successes, 30 explicit risk blocks, and 24 technical failures. Applying the
+expanded policy to the same observations admits 82 probes: the same 56 strict
+successes, only 3 explicit risk blocks, and 23 technical failures. Conditional
+strict success therefore rises from `50.9%` to `68.3%`; this is a target-safety
+filter, not free throughput, so skipped runners must be backfilled.
 
 Built from decrypted live evidence of runs:
 
@@ -11,7 +31,7 @@ Sample base: 66 IPs with safe verdicts joined.
 ## Hard denylist (recommended)
 
 ```text
-20.,52.
+4.,13.,20.,40.,52.,68.
 ```
 
 Evidence:
@@ -36,11 +56,11 @@ Do **not** treat this as a permanent global ban forever; refresh after each majo
 
 ## Operational recipe
 
-1. Pass denylist into workflow input `egress_prefix_denylist=20.,52.`
+1. Pass denylist into workflow input `egress_prefix_denylist=4.,13.,20.,40.,52.,68.`
 2. Over-provision candidates so skipped IPs do not starve live count:
    - target ~20 live probes
-   - start ~32-40 matrix slots (`node_slots_json=[1..36]`)
-   - keep `max_parallel=20` and stagger 20-30s
+   - start ~50 matrix slots (`node_slots_json=[1..50]`)
+   - keep `max_parallel=20` and stagger 10-15s
 3. Skipped jobs exit before touching signup target (`ip_skipped` / `egress_denylist`).
 
 ## /16 notes (subset of 20.)

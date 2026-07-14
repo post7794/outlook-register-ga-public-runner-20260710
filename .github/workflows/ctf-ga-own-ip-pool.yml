@@ -66,7 +66,7 @@ on:
       egress_prefix_denylist:
         description: "Optional comma-separated bad egress IP prefixes to skip before touching the target, e.g. 20.,52. Recommended file: config/egress_prefix_denylist.recommended.txt. Over-provision candidates (e.g. 1..36) when denylist is non-empty so skipped IPs do not starve live count."
         required: false
-        default: ""
+        default: "4.,13.,20.,40.,52.,68."
       pre_first_hold_warmup_ms:
         description: "Override captcha pre-first-hold warmup in ms; empty uses config default"
         required: false
@@ -141,7 +141,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '01086ae6d319a8bbf019ddb34267edd59ac7ec31' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '01086ae6d319a8bbf019ddb34267edd59ac7ec31' || (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -245,6 +245,23 @@ jobs:
             echo "unexpected synthetic pt_round/pt_ts append still present" >&2
             exit 1
           fi
+
+      - name: Verify exact 5s release source
+        if: ${{ inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=00b68437e041cbdcee2be209a18d7a5592f4c2dd
+          actual=$(git rev-parse HEAD)
+          echo "expected=$expected actual=$actual"
+          test "$actual" = "$expected"
+          test -f config.release-5s-success-ga.json
+          test -f run_xvfb_release_5s_success_baseline.sh
+          test -f run_xvfb_release_5s_success_attempt2.sh
+          grep -q -- '--time-warp-wall-ms 6500' run_xvfb_release_5s_success_attempt2.sh
+          grep -q -- '--time-warp-server-challenge-rounds 8' run_xvfb_release_5s_success_attempt2.sh
+          grep -q -- '--time-warp-retry-visible-challenge-after-ms 7000' run_xvfb_release_5s_success_attempt2.sh
+          grep -q -- '--real-final-neutral-w0-success' run_xvfb_release_5s_success_attempt2.sh
 
       - name: Verify offline ADS-like source
         if: ${{ inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' }}
@@ -588,6 +605,33 @@ jobs:
           print(json.dumps({'ua': ua, 'seed': seeds[0], 'source': ads.get('source')}, ensure_ascii=False))
           PY
 
+      - name: Diversify exact-release Cloak fingerprint per fresh runner
+        if: ${{ (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && steps.egress.outputs.should_probe != 'false' }}
+        shell: bash
+        env:
+          GA_SLOT: ${{ matrix.attempt }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          path = Path("config.release-5s-success-ga.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          material = f"{os.environ.get('GITHUB_RUN_ID','')}:{os.environ['GA_SLOT']}"
+          seed = 10000 + int(hashlib.sha256(material.encode()).hexdigest()[:8], 16) % 90000
+          cloak = data.setdefault("cloakbrowser", {})
+          args = [str(value) for value in (cloak.get("args") or [])]
+          args = [value for value in args if not value.startswith("--fingerprint=")]
+          args.insert(0, f"--fingerprint={seed}")
+          cloak["args"] = args
+          profile = data.setdefault("ads_like_profile", {})
+          profile["seed"] = str(seed)
+          profile["source"] = "GA per-run deterministic seed"
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps({"fingerprint_seed": seed, "slot": os.environ["GA_SLOT"]}))
+          PY
+
       - name: Start subscription proxy
         if: ${{ inputs.network_mode == 'proxy_pool' && steps.egress.outputs.should_probe != 'false' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
         shell: bash
@@ -605,6 +649,7 @@ jobs:
             test -f "$PROXY_POOL_FILE"
             source_args=(--config "$PROXY_POOL_FILE")
           fi
+
           python tools/setup_ga_subscription_proxy.py \
             "${source_args[@]}" \
             --node-slot "${{ matrix.attempt }}" \
@@ -683,7 +728,12 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          source = Path('config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json')
+          release_variant = os.environ.get('GA_VARIANT', '').startswith('release_5s_success_')
+          source = Path(
+              'config.release-5s-success-ga.json'
+              if release_variant else
+              'config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json'
+          )
           data = json.loads(source.read_text(encoding='utf-8'))
           context = dict(data.get('context') or {})
           cloak = dict(data.get('cloakbrowser') or {})
@@ -701,7 +751,7 @@ jobs:
                   'slot': os.environ.get('GA_SLOT', ''),
                   'variant': os.environ.get('GA_VARIANT', ''),
                   'network_mode': os.environ.get('GA_NETWORK_MODE', ''),
-                  'xvfb_screen': '2560x1440x24',
+                  'xvfb_screen': '1920x1200x24' if release_variant else '2560x1440x24',
                   'cloakbrowser_version': importlib.metadata.version('cloakbrowser'),
                   'source_config_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                   # Keep egress comparable without persisting an address in

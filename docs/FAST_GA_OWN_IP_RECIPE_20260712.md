@@ -16,10 +16,10 @@
 ## Recommended dispatch
 
 ```text
-node_slots_json=[1..32]
-egress_prefix_denylist=20.,52.
+node_slots_json=[1..50]
+egress_prefix_denylist=4.,13.,20.,40.,52.,68.
 slot_stagger_seconds=12
-max_parallel=24
+max_parallel=20
 variant=online_ads_ga_fresh_rechallenge
 ```
 
@@ -30,4 +30,4 @@ assuming similar skip ratio.
 
 - hold_retries=3 (collector acceptance)
 - isolation fresh rechallenge path
-- denylist 20./52. (IP quality)
+- denylist 4./13./20./40./52./68. (IP quality)
