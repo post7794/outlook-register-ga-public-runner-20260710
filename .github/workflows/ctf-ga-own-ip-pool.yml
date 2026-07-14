@@ -92,7 +92,7 @@ on:
       runtime_mode:
         description: "Runtime bootstrap: legacy installs apt/pip per live slot; prebuilt restores the validated dependency/font/browser cache."
         required: true
-        default: "legacy"
+        default: "prebuilt"
         type: choice
         options:
           - legacy

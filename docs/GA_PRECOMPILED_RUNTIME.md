@@ -54,7 +54,7 @@ runtime_mode=legacy|prebuilt
 runtime_cache_revision=v1
 ```
 
-初始默认保持 `legacy`。先用 1–5 个 slot 验证：
+已通过 5-slot 小样本验证，当前默认已切到 `prebuilt`。验证标准：
 
 - cache restore 成功；
 - Python/Cloak/Chromium 版本一致；
@@ -62,7 +62,7 @@ runtime_cache_revision=v1
 - HumanCaptcha、strict success 和 Graph 入库没有行为退化；
 - `Restore + Validate` 明显快于旧环境的约 72s。
 
-验证完成后再把默认切到 `prebuilt`。
+实测 `Restore + Validate` 为 8–12 秒，旧环境约 72 秒；3 个 live slots 中 2 个 strict success 且 2 个 Graph healthy，未观察到环境技术失败。
 
 ## 边界
 
