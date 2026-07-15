@@ -249,6 +249,13 @@ completed, but the shared `/outlook-email/api/external/outlook/import-authorize`
 route returned HTTP 404 during a short hourly nginx reconfiguration window.
 They remain separate from captcha success-rate analysis.
 
+The observed 404 requests span `01:00:17` through `01:01:29` UTC, while the
+first later request returned 200. The ingestion loop now retries only transient
+network/404/408/425/429/5xx responses at `0/25/50/75/100s`. Permanent
+application failures stop immediately. This protects Graph-healthy yield from
+the measured route window without reclassifying OAuth or Graph rejection as a
+transport retry.
+
 ## Next controlled source: exact guards only on the fresh handler
 
 The next source pin is `b80b75375a0925b0fa3e80f962f7014ecfe5d495`.

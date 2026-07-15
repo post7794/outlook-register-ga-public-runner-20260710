@@ -1038,7 +1038,10 @@ jobs:
             exit 0
           fi
           success=false
-          for retry in 1 2 3; do
+          # The panel's hourly nginx reconciliation has produced a measured
+          # ~75s window where this exact route returns 404.  Cover that window
+          # without retrying permanent OAuth/Graph application failures.
+          for retry in 1 2 3 4 5; do
             rm -f "$response_file"
             http_code=$(curl -sS --connect-timeout 10 --max-time 120 \
               -o "$response_file" -w '%{http_code}' \
@@ -1080,7 +1083,11 @@ jobs:
               success=true
               break
             fi
-            if [ "$retry" -lt 3 ]; then sleep 20; fi
+            case "$http_code" in
+              000|404|408|425|429|5??) ;;
+              *) break ;;
+            esac
+            if [ "$retry" -lt 5 ]; then sleep 25; fi
           done
           echo "outlookEmail integration attempted success=$success"
           exit 0
