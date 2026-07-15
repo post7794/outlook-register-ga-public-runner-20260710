@@ -793,3 +793,41 @@ The second process uses a distinct coordinator slot identity so it cannot reuse
 the first final reservation. It is attempted only for fresh-policy outcomes,
 not explicit risk blocks, and remains disabled by default pending randomized
 A/B evidence.
+
+## Prospective full-session-restart A/B
+
+Commit `d8117d3` added three explicit policies while keeping production on
+`off`: `off`, randomized `fresh_ab_v1`, and treatment-only `fresh_all_v1`.
+Treatment terminates the first browser process after a fresh-policy stop, waits
+60 seconds, obtains a distinct coordinator slot identity, and starts a new
+account and browser session on the same runner egress. Explicit risk blocks are
+never retried.
+
+Smoke run `29424529068` supplied one important implementation proof: one first
+session stopped on fresh, the new process reached strict CreateAccount, and the
+account passed Graph health. This showed that the restart path can work, but a
+single recovered sample was not promotion evidence.
+
+Run `29425165155` then dispatched a prospective randomized 100-slot test:
+
+| arm | slots | skip | live | initial accepted | strict / Graph healthy | first fresh | restarted | recovered strict |
+|-----|------:|-----:|-----:|-----------------:|-----------------------:|------------:|----------:|-----------------:|
+| restart treatment | 50 | 33 | 17 | 16 | 10 / 10 | 6 | 6 | 0 |
+| single-session control | 50 | 25 | 25 | 25 | 19 / 19 | 5 | 0 | n/a |
+
+All six treatment restarts ended in an explicit second-session risk block.
+Treatment live-to-strict conversion was `58.8%`, versus `76.0%` for control;
+accepted-to-strict was `62.5%` versus `76.0%`. The arms had an imbalanced
+denylist-skip count, and the live strict comparison is not statistically
+decisive at this sample size (two-sided Fisher `p=0.314`). The direct recovery
+endpoint is nevertheless unambiguous for this run: `0/6` incremental strict
+recoveries. Combining smoke and the main run gives `1/7` recoveries, with the
+other six all becoming second-session risk blocks.
+
+The 60-second same-egress restart hypothesis is therefore rejected for
+production. The default remains `fresh_session_restart_policy=off`. The causal
+interpretation is that fresh is usually not stale browser state that can be
+repaired by recycling the process; after one accepted proof attempt, the same
+GA egress commonly has no second registration opportunity. Future work should
+filter repeatedly bad egress before account work or obtain a fresh runner,
+rather than repeatedly retrying the same IP.
