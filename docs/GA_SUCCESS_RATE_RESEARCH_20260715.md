@@ -973,3 +973,22 @@ Hotmail treatment and Outlook control. It changes only the generated config's
 email suffix after the ADS profile is applied. Production remains
 `email_domain_policy=source_default` (Outlook), and the one-experiment guard now
 covers warmup, country, DOB, and namespace policies.
+
+Smoke run `29436967639` produced five admitted probes, all strict and Graph
+healthy. Decrypted signatures confirmed three Hotmail and two Outlook memberName
+values matched their assigned arms, proving both registration and ingestion
+support the namespace experiment.
+
+Prospective run `29437357558` dispatched 100 slots:
+
+| arm | slots | skip | live | accepted | strict | Graph healthy | live -> strict | accepted -> strict |
+|-----|------:|-----:|-----:|---------:|-------:|--------------:|---------------:|-------------------:|
+| Hotmail | 50 | 26 | 24 | 20 | 11 | 10 | 45.8% | 55.0% |
+| Outlook | 50 | 33 | 17 | 17 | 8 | 8 | 47.1% | 47.1% |
+
+Hotmail did not improve live conversion (`-1.2pp`, Fisher `p=1.0`). Its
+accepted-to-strict value was `+7.9pp`, but with Fisher `p=0.746` and six
+explicit risk blocks versus none in the Outlook arm. Higher raw Hotmail counts
+came from seven fewer denylist skips, not better conversion. The namespace
+hypothesis is rejected and production remains
+`email_domain_policy=source_default` (Outlook).
