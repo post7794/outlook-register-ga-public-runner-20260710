@@ -313,6 +313,7 @@ jobs:
           result="$private/recovery-result.json"
           safe="$RUNNER_TEMP/recovery-runtime-safe.json"
           writeback_safe="$RUNNER_TEMP/recovery-writeback-safe.json"
+          probe_safe="$RUNNER_TEMP/recovery-probe-safe.log"
           log="$RUNNER_TEMP/recovery-runtime.log"
           err="$RUNNER_TEMP/recovery-runtime.err.log"
           test "$(git -C "$runtime" rev-parse HEAD)" = '00b68437e041cbdcee2be209a18d7a5592f4c2dd'
@@ -343,9 +344,52 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "safe_status=$safe" >> "$GITHUB_OUTPUT"
           echo "writeback_safe=$writeback_safe" >> "$GITHUB_OUTPUT"
-          if [ -f "$log" ]; then
-            grep -E '^\[recovery\]|^\[Captcha\]|SERVICE_ABUSE|RISK_VERIFY|PREFLIGHT|HUMAN_' "$log" \
-              | head -n 100 || true
+          echo "probe_safe=$probe_safe" >> "$GITHUB_OUTPUT"
+          LOG="$log" OUT="$probe_safe" python3 - <<'PY' || : > "$probe_safe"
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import urlsplit, urlunsplit
+
+          source = Path(os.environ["LOG"])
+          target = Path(os.environ["OUT"])
+          allowed = ("[recovery]", "[Captcha]", "[Probe]")
+
+          def scrub_url(match):
+              raw = match.group(0).rstrip("'\"),]}")
+              suffix = match.group(0)[len(raw):]
+              try:
+                  parts = urlsplit(raw)
+                  safe = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+              except Exception:
+                  safe = "[url-redacted]"
+              return safe + suffix
+
+          rows = []
+          if source.exists():
+              for raw in source.read_text(encoding="utf-8", errors="replace").splitlines():
+                  if not raw.startswith(allowed):
+                      continue
+                  line = re.sub(r"https?://[^\s]+", scrub_url, raw)
+                  line = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "[email-redacted]", line)
+                  line = re.sub(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)", "[ip-redacted]", line)
+                  line = re.sub(
+                      r"(?i)\b(token|code|qi|seq|rsc|uuid|endpoint)=([^\s,}\]]+)",
+                      lambda m: f"{m.group(1)}=[redacted]",
+                      line,
+                  )
+                  line = re.sub(
+                      r'(?i)"(current_qi|last_seq|hintedQi)"\s*:\s*"[^"]*"',
+                      lambda m: f'"{m.group(1)}":"[redacted]"',
+                      line,
+                  )
+                  rows.append(line[:1200])
+                  if len(rows) >= 300:
+                      break
+          target.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
+          PY
+          if [ -f "$probe_safe" ]; then
+            head -n 220 "$probe_safe" || true
           fi
           if [ -f "$err" ]; then
             tail -n 40 "$err" || true
@@ -450,6 +494,7 @@ jobs:
             ${{ steps.acquire.outputs.safe }}
             ${{ steps.recovery.outputs.safe_status }}
             ${{ steps.recovery.outputs.writeback_safe }}
+            ${{ steps.recovery.outputs.probe_safe }}
             ${{ steps.complete.outputs.safe }}
 
       - name: Cleanup private recovery material
