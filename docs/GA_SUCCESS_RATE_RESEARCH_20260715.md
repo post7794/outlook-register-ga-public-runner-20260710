@@ -281,6 +281,58 @@ fresh PX561 final
 -> Graph healthy
 ```
 
-Only if the exact guards still produce repeated fresh `result|-1` should the
-next isolated variable be `time-warp-attempts=2`; the deadline should not be
-increased again.
+## Exact guards still used the wrong final normalizer
+
+Run `29381346438` tested source `b80b753` with 50 slots, ten-way parallelism,
+the 300-second fresh deadline, and no other registration-path change:
+
+```text
+50 dispatched
+ 29 egress-denylist skips
+ 21 live probes
+   20 accepted an initial collector result|0
+   14 strict CreateAccount
+   14 Graph healthy
+    3 fresh absolute timeout
+    1 fresh rounds exhausted without CreateAccount
+    2 accepted first proof -> explicit riskBlock
+    1 username unavailable
+```
+
+Rates with explicit denominators:
+
+```text
+raw strict                 14/50 = 28.0%
+live-probe strict           14/21 = 66.7%
+accepted-checkpoint strict  14/20 = 70.0%
+Graph after creation        14/14 = 100%
+Graph healthy / run minute  14/15.15 = 0.924/min
+```
+
+The run-level failure is the intentional goal-evaluation result because five
+non-IP technical failures remain; all 50 matrix jobs themselves finished
+successfully. Decrypted evidence from all four fresh slots is decisive:
+
+- all twelve fresh invocations passed their runtime/readiness gates;
+- eight emitted a decisive PX561 final and all eight returned `result|-1`;
+- four invocations timed out without a decisive final;
+- no fresh proof returned `result|0`, reached `risk/verify -> continue`, or
+  produced CreateAccount.
+
+The guards were installed correctly, but every fresh final was still routed
+through `minimal_natural_hold`. Its implementation explicitly preserves a
+9.5–12.5-second natural-hold envelope; it is not the normalizer used by the
+validated 15-second-logical / 6.5-second-wall primitive. The local exact sample
+that crossed two HumanCaptcha challenges and reached CreateAccount used
+`ads_safe`. Its accepted fresh PX561 had `XGhm≈87.6`, while the rejected
+`b80b753` fresh finals were in the `20.4–47.2` band. Browser and egress differ,
+so this scalar comparison is directional evidence rather than proof that XGhm
+alone is causal.
+
+Source `b33b57e59f53667d9f7c4fd7875cc592927c8108` changes only the fresh
+wrapper's primary normalizer to `ads_safe`. The hook remains deferred until
+Microsoft issues a fresh challenge, so the successful initial natural path is
+unchanged. Post-primary final retries remain disabled; the next run tests one
+real decisive final per fresh challenge. If that still fails, the next isolated
+variables are, in order, skipping mid-probe snapshots and then allowing a
+second real hold attempt. The deadline should not be increased again.
