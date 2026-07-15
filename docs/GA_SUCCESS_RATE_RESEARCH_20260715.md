@@ -856,3 +856,28 @@ produce exactly 50 assignments per arm. Public-safe verdicts expose policy,
 arm, effective warmup, and whether the probe actually ran. Promotion requires
 a prospective improvement in live-to-strict or accepted-to-strict conversion;
 fewer hold rounds or shorter duration alone is only an efficiency result.
+
+Smoke run `29428709560` verified the experiment contract: five assignments per
+arm, two admitted probes per arm, all four admitted probes carrying the intended
+effective warmup, and one strict / one fresh-policy stop in each arm.
+
+Prospective run `29429069331` then dispatched 100 slots:
+
+| arm | slots | skip | live / accepted | strict | Graph healthy | live or accepted -> strict |
+|-----|------:|-----:|----------------:|-------:|--------------:|---------------------------:|
+| 14s treatment | 50 | 24 | 26 / 26 | 13 | 12 | 50.0% |
+| 22s control | 50 | 33 | 17 / 17 | 12 | 12 | 70.6% |
+
+The raw strict yields (`26%` versus `24%`) are misleading because the treatment
+arm happened to receive nine more admitted egresses. On the conversion endpoint
+the 14-second arm moved in the wrong direction by `-20.6pp`; the two-sided
+Fisher value is `p=0.219`, so this sample is directional rather than a precise
+effect-size estimate. Fresh-policy stops were also more frequent at 14 seconds
+(`11/26`) than at 22 seconds (`3/17`). All admitted probes reached an accepted
+proof, so the observed difference lies after collector acceptance, not in first
+proof acquisition.
+
+The 14-second treatment is rejected and production remains `fixed_input` with
+the checked-in 22-second warmup. No claim is made that 22 seconds is globally
+optimal; this experiment only shows that shortening it to 14 seconds did not
+raise end-to-end strict or Graph-healthy conversion.
