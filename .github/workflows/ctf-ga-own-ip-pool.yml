@@ -1143,6 +1143,11 @@ jobs:
           VARIANT: ${{ inputs.variant }}
           NETWORK_MODE: ${{ inputs.network_mode }}
           RUNNER_LABEL: ${{ inputs.runner }}
+          COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
+          MAX_PARALLEL: ${{ inputs.max_parallel }}
+          RUNTIME_MODE: ${{ inputs.runtime_mode }}
+          PROBE_TIMEOUT_MINUTES: ${{ inputs.probe_timeout_minutes }}
+          JOB_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           PER_IP_MAX_REGISTRATIONS: ${{ inputs.per_ip_max_registrations }}
           PROBE_EXIT_CODE: ${{ steps.live.outputs.exit_code }}
         run: |
@@ -1299,6 +1304,11 @@ jobs:
               "variant": os.environ.get("VARIANT", ""),
               "network_mode": os.environ.get("NETWORK_MODE", ""),
               "runner": os.environ.get("RUNNER_LABEL", ""),
+              "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
+              "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
+              "runtime_mode": os.environ.get("RUNTIME_MODE", ""),
+              "probe_timeout_minutes": int(os.environ.get("PROBE_TIMEOUT_MINUTES", "0")),
+              "job_timeout_minutes": int(os.environ.get("JOB_TIMEOUT_MINUTES", "0")),
               "probe_exit_code": os.environ.get("PROBE_EXIT_CODE", ""),
               "category": category,
               "reason": reason,

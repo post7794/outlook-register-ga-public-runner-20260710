@@ -725,3 +725,9 @@ rollback file. Workflow defaults now select `online_ads_ga_production_fast_fail`
 and `coordinator_mode=final_only`. Redacted verdicts also expose the final
 reservation count, wait list, and observed gap so future queue analysis no
 longer requires evidence decryption.
+
+Run `29416856621` then dispatched ten slots while overriding only
+`node_slots_json`, thereby testing the promoted defaults rather than restating
+them as explicit inputs. It produced five strict / five Graph-healthy accounts;
+all ten verdicts contained the new coordinator fields, seven slots made eight
+final reservations, and every observed reservation reported `gap_ms=12000`.
