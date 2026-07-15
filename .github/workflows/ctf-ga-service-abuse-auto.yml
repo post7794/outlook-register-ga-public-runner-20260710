@@ -19,10 +19,14 @@ on:
         description: "Bounded fresh-runner slots; use [1] normally or [1..20] for a batch"
         required: true
         default: "[1]"
+      natural_final_proof_mode:
+        description: "Natural-hold final PX561 treatment: minimal=registration path, off=prior recovery control"
+        required: true
+        default: "minimal"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "5277174c4b9686f1818815a38e3788c0cadfed07"
+        default: "7a121f5890072d57646ea10ca7ba06d5107defc9"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -55,6 +59,7 @@ jobs:
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
       RECOVERY_SLOT: ${{ matrix.slot }}
+      NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -82,7 +87,11 @@ jobs:
           )
           if not valid:
               raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
+          mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
+          if mode not in {"minimal", "off"}:
+              raise SystemExit("natural_final_proof_mode must be minimal or off")
           print(f"recovery matrix slot={current} count={len(slots)}")
+          print(f"natural final proof mode={mode}")
           PY
 
       - name: Checkout private recovery control plane
@@ -365,6 +374,7 @@ jobs:
               --omit-email-output \
               --require-service-abuse-preflight \
               --natural-hold-profile registration_10s \
+              --natural-final-proof-mode "$NATURAL_FINAL_PROOF_MODE" \
               --parent-retry-max 2 \
               --writeback-outlook-email \
               --outlook-email-config "$private/outlook-email.json" \
@@ -485,6 +495,7 @@ jobs:
               "schema": 1,
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
+              "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
               "runner": "ubuntu-22.04",
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
