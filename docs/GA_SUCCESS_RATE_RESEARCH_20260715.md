@@ -162,7 +162,7 @@ registration path:
 
 ```text
 variant=online_ads_ga_fresh_5s_recovery
-private source=bdd2ef985f560a7a7a13685a6389ac3711af5cfc
+private source=7c5df7beb44e9e0c1bb070a7ebabb41abce234c6
 initial HumanCaptcha=unchanged natural online-ADS path
 fresh HumanCaptcha=late-installed 15s logical / 6.5s wall handler
 browser/config/final normalizer=unchanged online-ADS production values
