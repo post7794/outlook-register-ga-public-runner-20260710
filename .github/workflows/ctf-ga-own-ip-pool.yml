@@ -516,7 +516,7 @@ jobs:
             .venv
             ~/.cloakbrowser
             ~/.local/share/fonts/ga-runtime
-          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.runtime_cache_revision }}-py310-cloak048
+          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.runtime_cache_revision }}-${{ inputs.runner == 'ubuntu-24.04' && 'py312' || 'py310' }}-cloak048
           fail-on-cache-miss: true
 
       - name: Validate precompiled GA runtime

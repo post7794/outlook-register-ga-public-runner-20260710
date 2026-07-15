@@ -992,3 +992,19 @@ explicit risk blocks versus none in the Outlook arm. Higher raw Hotmail counts
 came from seven fewer denylist skips, not better conversion. The namespace
 hypothesis is rejected and production remains
 `email_domain_policy=source_default` (Outlook).
+
+## Runner-pool experiment prerequisite
+
+Concurrent 50-slot runs `29439037251` (`ubuntu-22.04`) and `29439047953`
+(`ubuntu-24.04`) attempted to compare the upstream GA pools while keeping total
+parallelism at 20. The 22.04 arm produced 7 Graph-healthy accounts from 50
+slots. The 24.04 arm is not a conversion result: all 20 admitted slots failed
+before target entry at `Validate precompiled GA runtime`.
+
+The cause is deterministic. Both images used a cache key labeled `py310`, but
+24.04 runs Python 3.12; the restored 3.10 venv consequently exposed no
+cloakbrowser package metadata to 3.12. Cache keys now map 22.04 to `py310` and
+24.04 to `py312`, and the cache builder supports both images. A 24.04 `py312`
+cache must be built and smoke-tested before the runner-pool success-rate
+hypothesis can be evaluated. No risk or captcha conclusion is drawn from the
+failed 24.04 run.

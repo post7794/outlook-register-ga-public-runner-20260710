@@ -14,6 +14,7 @@ on:
         type: choice
         options:
           - ubuntu-22.04
+          - ubuntu-24.04
 
 permissions:
   actions: write
@@ -38,7 +39,7 @@ jobs:
             .venv
             ~/.cloakbrowser
             ~/.local/share/fonts/ga-runtime
-          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-py310-cloak048
+          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-${{ inputs.runner == 'ubuntu-24.04' && 'py312' || 'py310' }}-cloak048
 
       - name: Install build-only font packages
         if: ${{ steps.runtime-cache.outputs.cache-hit != 'true' }}
@@ -61,7 +62,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.10"
+          expected_python="${{ inputs.runner == 'ubuntu-24.04' && '3.12' || '3.10' }}"
+          test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "$expected_python"
           python3 -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip wheel setuptools
@@ -188,7 +190,7 @@ jobs:
             .venv
             ~/.cloakbrowser
             ~/.local/share/fonts/ga-runtime
-          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-py310-cloak048
+          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-${{ inputs.runner == 'ubuntu-24.04' && 'py312' || 'py310' }}-cloak048
 
       - name: Report cache result
         shell: bash
@@ -196,7 +198,7 @@ jobs:
           {
             echo "### GA runtime cache"
             echo
-            echo "- key: \`${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-py310-cloak048\`"
+            echo "- key: \`${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.cache_revision }}-${{ inputs.runner == 'ubuntu-24.04' && 'py312' || 'py310' }}-cloak048\`"
             echo "- restored: \`${{ steps.runtime-cache.outputs.cache-hit == 'true' }}\`"
             echo "- browser: \`$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome | tail -1)\`"
             echo "- size: \`$(du -sh .venv "$HOME/.cloakbrowser" "$HOME/.local/share/fonts/ga-runtime" | awk '{s=s $1 " "; p=p $2 " ";} END {print s "(" p ")"}')\`"

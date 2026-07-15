@@ -28,7 +28,7 @@ font alias       中位约 2s
 ```text
 Build GA precompiled runtime cache
 cache_revision=v1
-runner=ubuntu-22.04
+runner=ubuntu-22.04 或 ubuntu-24.04
 ```
 
 对应 workflow：
@@ -37,11 +37,16 @@ runner=ubuntu-22.04
 .github/workflows/build-ga-runtime-cache.yml
 ```
 
-cache key：
+cache key 按 runner 的 Python ABI 隔离：
 
 ```text
-Linux-X64-ga-runtime-v1-py310-cloak048
+ubuntu-22.04: Linux-X64-ga-runtime-v1-py310-cloak048
+ubuntu-24.04: Linux-X64-ga-runtime-v1-py312-cloak048
 ```
+
+不能跨 runner 复用 venv。24.04 的系统 Python 是 3.12；若误恢复 py310
+cache，activate 脚本虽然能执行，但包 metadata 不在 3.12 的搜索路径中，
+runtime validation 会在触碰注册目标前失败。
 
 Cache 不覆盖更新。Python 包、Cloak/Chromium 或字体配方变化时，必须把 revision 改为 `v2`、`v3`。
 
@@ -61,6 +66,9 @@ runtime_cache_revision=v1
 - `Segoe UI`、`Calibri` font match 正常；
 - HumanCaptcha、strict success 和 Graph 入库没有行为退化；
 - `Restore + Validate` 明显快于旧环境的约 72s。
+
+上述生产验证针对 `ubuntu-22.04`。`ubuntu-24.04` 必须先单独构建并验证
+`py312` cache，不能把 22.04 的结果外推到 24.04。
 
 实测 `Restore + Validate` 为 8–12 秒，旧环境约 72 秒；3 个 live slots 中 2 个 strict success 且 2 个 Graph healthy，未观察到环境技术失败。
 
