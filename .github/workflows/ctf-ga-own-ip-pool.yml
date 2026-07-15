@@ -7,6 +7,10 @@ on:
         description: "JSON matrix labels; in proxy mode they select pool slots, in GA-own-IP mode each label starts a fresh runner"
         required: true
         default: "[1,2,3,4,5]"
+      orchestration_id:
+        description: "Optional public-safe batch correlation label used by the target Graph-healthy orchestrator"
+        required: false
+        default: ""
       network_mode:
         description: "Use the fresh GA runner egress directly or route through the configured proxy pool"
         required: true
@@ -1143,6 +1147,7 @@ jobs:
           VARIANT: ${{ inputs.variant }}
           NETWORK_MODE: ${{ inputs.network_mode }}
           RUNNER_LABEL: ${{ inputs.runner }}
+          ORCHESTRATION_ID: ${{ inputs.orchestration_id }}
           COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
           MAX_PARALLEL: ${{ inputs.max_parallel }}
           RUNTIME_MODE: ${{ inputs.runtime_mode }}
@@ -1304,6 +1309,7 @@ jobs:
               "variant": os.environ.get("VARIANT", ""),
               "network_mode": os.environ.get("NETWORK_MODE", ""),
               "runner": os.environ.get("RUNNER_LABEL", ""),
+              "orchestration_id": os.environ.get("ORCHESTRATION_ID", ""),
               "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
               "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
               "runtime_mode": os.environ.get("RUNTIME_MODE", ""),

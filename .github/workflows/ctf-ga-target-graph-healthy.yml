@@ -1,0 +1,138 @@
+name: CTF GA target Graph healthy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_graph_healthy:
+        description: "Stop after this many child verdicts are Graph healthy"
+        required: true
+        default: "100"
+      batch_slots:
+        description: "Maximum fresh GA slots in one child batch (1-256)"
+        required: true
+        default: "50"
+      min_batch_slots:
+        description: "Minimum adaptive backfill batch after the first batch"
+        required: true
+        default: "5"
+      max_dispatched:
+        description: "Hard cap across all child batches"
+        required: true
+        default: "400"
+      child_ref:
+        description: "Public-runner ref used for child workflow dispatches"
+        required: true
+        default: "main"
+      child_timeout_minutes:
+        description: "Parent wait deadline for each child workflow"
+        required: true
+        default: "45"
+      poll_seconds:
+        description: "Child status polling interval"
+        required: true
+        default: "20"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: ga-target-graph-healthy
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+
+      - name: Run target Graph-healthy orchestrator
+        id: orchestrate
+        shell: bash
+        run: |
+          set +e
+          mkdir -p Results
+          python3 tools/ga_target_healthy_orchestrator.py \
+            --repo "${{ github.repository }}" \
+            --ref "${{ inputs.child_ref }}" \
+            --target-graph-healthy "${{ inputs.target_graph_healthy }}" \
+            --batch-slots "${{ inputs.batch_slots }}" \
+            --min-batch-slots "${{ inputs.min_batch_slots }}" \
+            --max-dispatched "${{ inputs.max_dispatched }}" \
+            --child-timeout-minutes "${{ inputs.child_timeout_minutes }}" \
+            --poll-seconds "${{ inputs.poll_seconds }}" \
+            --orchestration-id "ga-target-${{ github.run_id }}" \
+            --artifact-root Results/ga-target \
+            --summary Results/target-healthy-summary.json
+          ec=$?
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Render safe orchestration summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("Results/target-healthy-summary.json")
+          if not path.is_file():
+              raise SystemExit("target-healthy summary missing")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          totals = data.get("totals") or {}
+          lines = [
+              "## GA target Graph-healthy",
+              "",
+              f"- success: `{bool(data.get('success'))}`",
+              f"- target: `{data.get('target_graph_healthy')}`",
+              f"- achieved Graph healthy: `{data.get('achieved_graph_healthy')}`",
+              f"- dispatched: `{totals.get('dispatched', 0)}`",
+              f"- live: `{totals.get('live', 0)}`",
+              f"- strict CreateAccount: `{totals.get('strict_create_account', 0)}`",
+              f"- child batches: `{totals.get('batches', 0)}`",
+              "",
+              "| batch | child run | slots | live | strict | Graph healthy |",
+              "|------:|----------:|------:|-----:|-------:|--------------:|",
+          ]
+          for index, row in enumerate(data.get("batches") or [], 1):
+              lines.append(
+                  f"| {index} | {row.get('run_id')} | {row.get('dispatched')} | "
+                  f"{row.get('live')} | {row.get('strict_create_account')} | "
+                  f"{row.get('graph_healthy')} |"
+              )
+          error = data.get("error")
+          if error:
+              lines.extend(["", f"- terminal reason: `{error}`"])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          print(json.dumps({
+              "success": data.get("success"),
+              "target": data.get("target_graph_healthy"),
+              "achieved": data.get("achieved_graph_healthy"),
+              "dispatched": totals.get("dispatched", 0),
+              "batches": totals.get("batches", 0),
+          }))
+          PY
+
+      - name: Upload public-safe orchestration summaries
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-target-healthy-summary-${{ github.run_id }}
+          path: |
+            Results/target-healthy-summary.json
+            Results/ga-target/**/batch-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce target achieved
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          test "${{ steps.orchestrate.outputs.exit_code }}" = "0"
