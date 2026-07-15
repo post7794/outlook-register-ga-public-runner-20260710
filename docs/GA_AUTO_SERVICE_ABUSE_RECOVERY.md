@@ -1,0 +1,134 @@
+# GA automatic service-abuse recovery
+
+This control plane turns the production-verified single-account recovery core
+from `service-abuse-recovery-v1.0.0` into a bounded unattended queue.
+
+## Closed loop
+
+```text
+fresh ubuntu-22.04 runner
+-> reject known-bad GA egress before touching an account
+-> authenticate to OutlookEmail
+-> list only inactive/quarantined/service_abuse accounts
+-> atomically lease one account through ga-coordinator
+-> materialize credentials only in runner.temp (mode 0600)
+-> exact v1.0.0 recovery state machine
+-> TierRestore 2xx
+-> Graph Inbox 200
+-> OutlookEmail writeback + immediate health enrollment
+-> complete lease with a safe outcome
+-> cleanup all private material
+```
+
+One workflow run uses one fresh GitHub-hosted runner and at most one account.
+A retry therefore necessarily receives a different GA runner/egress. The
+repository-wide concurrency group prevents overlapping scheduled runs, while
+the server lease also protects against manual or cross-run duplication.
+
+## Coordinator contract
+
+The existing authenticated timestamp coordinator now also exposes:
+
+```text
+POST /v1/recovery/leases
+POST /v1/recovery/leases/complete
+GET  /v1/recovery/stats
+```
+
+Only account ids and quarantine-generation timestamps enter coordinator state.
+Mailbox addresses, passwords, refresh tokens, OutlookEmail login material, and
+full egress IPs are never sent to the coordinator.
+
+Lease properties:
+
+- one active lease per account;
+- idempotent `request_id`;
+- 25-minute default TTL;
+- three attempts per quarantine generation;
+- 15-minute retryable cooldown;
+- five-minute technical cooldown;
+- six-hour exhausted-cycle cooldown;
+- 24-hour terminal/success cooldown;
+- a new `quarantined_at` generation resets the attempt budget.
+
+Expired jobs consume an attempt and receive a technical cooldown instead of
+silently releasing an account into a duplicate runner.
+
+## Workflow
+
+Public execution workflow: `.github/workflows/ctf-ga-service-abuse-auto.yml`.
+It checks out the pinned private recovery-control source from
+`xbox-cn/outlook-register-ga-xvfb-action-20260707` before any account work.
+
+The private repository retains the canonical recovery source and an equivalent
+workflow template, but its organization currently cannot allocate hosted
+runners because of an Actions billing restriction. Run `29446705922` was
+rejected before checkout and before account leasing. Production execution must
+therefore originate in this already-validated public runner repository; this
+is a runner-allocation boundary, not a recovery result.
+
+Manual dispatch always runs. The 15-minute schedule is fail-closed behind:
+
+```text
+SERVICE_ABUSE_AUTO_ENABLED=true
+```
+
+Keep the variable `false` during deployment and smoke validation. Enable it
+only after one manually dispatched run proves the entire lease, recovery,
+writeback, and observation-group transition.
+
+Expected repository configuration:
+
+```text
+variable GA_COORDINATOR_URL
+secret   GA_COORDINATOR_TOKEN
+secret   OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64
+secret   SERVICE_ABUSE_EXPERIMENT_KEY
+secret   SERVICE_ABUSE_BROWSER_ENV_B64
+```
+
+The OutlookEmail configuration contains its base URL and login password. It is
+decoded only into `runner.temp`, is never uploaded, and is deleted in the
+always-run cleanup step.
+
+## Outcome semantics
+
+`workflow conclusion` is not the recovery result. Expected Microsoft/egress
+failures are recorded and the orchestration job can still finish cleanly.
+Promotion requires the redacted verdict to show:
+
+```text
+service_abuse_cleared=true
+graph_ok=true
+production_writeback_ok=true
+production_health_enrolled=true
+outcome=success
+```
+
+Important categories remain separate:
+
+- `LOGIN_RATE_LIMIT_IPBAN`: retry on a fresh runner;
+- Microsoft parent-page service error/risk rejection/HumanCaptcha failure:
+  retryable after cooldown;
+- `PREFLIGHT_ACCOUNT_ALREADY_HEALTHY`: reconcile through OutlookEmail refresh
+  instead of opening the browser;
+- `PREFLIGHT_NOT_EXACT_SERVICE_ABUSE`: not a recovery candidate;
+- missing fixture credentials: terminal for the current generation;
+- missing status or coordinator/writeback failure: technical, not captcha.
+
+Safe artifacts contain account id, attempt number, hashed lease/egress ids,
+state booleans, and error category only.
+
+## Deployment and rollback
+
+The production coordinator source is tracked in the private recovery repository
+at `tools/ga_coordinator_server.py`. Before installing it, back up both the old
+source and the SQLite database. The first deployed migration backup is:
+
+```text
+/opt/ga-final-coordinator/backups/20260715T195204Z
+```
+
+Rollback restores `server.py` from that directory and restarts
+`ga-final-coordinator.service`. The added SQLite tables are additive and do not
+change the existing `/v1/reservations` contract.

@@ -1,0 +1,463 @@
+name: CTF GA automatic service-abuse recovery (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: "Whole fresh-runner timeout"
+        required: true
+        default: "30"
+      lease_ttl_seconds:
+        description: "Coordinator lease TTL; must cover browser recovery and writeback"
+        required: true
+        default: "1500"
+      max_candidates:
+        description: "Oldest quarantined service-abuse accounts offered to the coordinator"
+        required: true
+        default: "500"
+      recovery_source_ref:
+        description: "Pinned private recovery-control source commit"
+        required: true
+        default: "47640fb555e7f13b95deeed0c6bebd33721dcb5e"
+      egress_prefix_denylist:
+        description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
+        required: false
+        default: "4.,13.,20.,40.,52.,68.,74.249."
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+
+concurrency:
+  group: service-abuse-auto-recovery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: github.event_name == 'workflow_dispatch' || vars.SERVICE_ABUSE_AUTO_ENABLED == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
+    env:
+      PYTHONIOENCODING: utf-8
+      CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
+      GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
+      GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
+      SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
+    steps:
+      - name: Reject GitHub UI re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "Automatic recovery runs may not be re-run; dispatch a fresh runner instead." >&2
+          exit 1
+
+      - name: Checkout private recovery control plane
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.recovery_source_ref || '47640fb555e7f13b95deeed0c6bebd33721dcb5e' }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Capture and admit fresh GA egress
+        id: egress
+        shell: bash
+        env:
+          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist || '4.,13.,20.,40.,52.,68.,74.249.' }}
+        run: |
+          set -euo pipefail
+          ip=$(curl -fsS --max-time 10 https://api.ipify.org || true)
+          IP="$ip" python3 - <<'PY'
+          import hashlib, json, os
+
+          ip = os.environ.get("IP", "").strip()
+          deny = [item.strip() for item in os.environ.get("EGRESS_PREFIX_DENYLIST", "").split(",") if item.strip()]
+          present = bool(ip)
+          admitted = present and not any(ip.startswith(prefix) for prefix in deny)
+          sha16 = hashlib.sha256(ip.encode()).hexdigest()[:16] if present else "unknown"
+          if ip.count(".") == 3:
+              parts = ip.split(".")
+              prefix = f"{parts[0]}.{parts[1]}."
+          else:
+              prefix = "unknown"
+          safe = {
+              "public_ip_present": present,
+              "admitted": admitted,
+              "egress_sha16": sha16,
+              "egress_prefix": prefix,
+              "reason": "admitted" if admitted else ("egress_denylist" if present else "egress_unavailable"),
+          }
+          path = os.path.join(os.environ["RUNNER_TEMP"], "recovery-egress-safe.json")
+          with open(path, "w", encoding="utf-8") as fh:
+              json.dump(safe, fh, ensure_ascii=False, indent=2)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key in ("admitted", "egress_sha16", "egress_prefix", "reason"):
+                  value = safe[key]
+                  if isinstance(value, bool):
+                      value = str(value).lower()
+                  fh.write(f"{key}={value}\n")
+          print(json.dumps(safe, ensure_ascii=False))
+          PY
+
+      - name: Record skipped egress
+        if: steps.egress.outputs.admitted != 'true'
+        shell: bash
+        run: |
+          echo "Fresh GA egress was skipped before account selection: ${{ steps.egress.outputs.reason }}"
+
+      - name: Checkout admitted exact 5s runtime
+        if: steps.egress.outputs.admitted == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: 00b68437e041cbdcee2be209a18d7a5592f4c2dd
+          path: .exact-5s-runtime
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: System dependencies
+        if: steps.egress.outputs.admitted == 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth ca-certificates fontconfig \
+            fonts-liberation fonts-noto fonts-noto-cjk \
+            fonts-crosextra-carlito fonts-crosextra-caladea
+          sudo apt-get install -y --no-install-recommends fonts-selawik || true
+          sudo add-apt-repository -y multiverse || true
+          sudo apt-get update || true
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+            | sudo debconf-set-selections || true
+          sudo apt-get install -y --no-install-recommends ttf-mscorefonts-installer || true
+          fc-cache -f
+
+      - name: Python environment
+        if: steps.egress.outputs.admitted == 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r requirements.txt
+          set +e
+          python -m cloakbrowser install
+          cb_code=$?
+          set -e
+          if [ "$cb_code" -ne 0 ]; then
+            test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+          fi
+
+      - name: Install registration-compatible Windows font aliases
+        if: steps.egress.outputs.admitted == 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          . .venv/bin/activate
+          python - <<'PY'
+          from fontTools.ttLib import TTFont
+          from pathlib import Path
+
+          out = Path.home() / ".local/share/fonts/windows-ctf"
+          out.mkdir(parents=True, exist_ok=True)
+
+          def pick(*paths):
+              return next((Path(path) for path in paths if Path(path).exists()), None)
+
+          default_src = pick(
+              "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+              "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+              "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+              "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
+          )
+          selawik_src = pick(
+              "/usr/share/fonts/truetype/selawik/Selawik.ttf",
+              "/usr/share/fonts/truetype/selawik/Selawik-Regular.ttf",
+          ) or default_src
+          calibri_src = pick(
+              "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
+              "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+          ) or default_src
+          msgothic_src = pick(
+              "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+              "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+          ) or default_src
+          if not default_src:
+              raise SystemExit("no base font found")
+
+          def set_name(font, name_id, value):
+              font["name"].setName(value, name_id, 3, 1, 0x409)
+              font["name"].setName(value, name_id, 1, 0, 0)
+
+          families = [
+              ("Segoe UI", "Regular", selawik_src),
+              ("Segoe UI Light", "Regular", selawik_src),
+              ("Calibri", "Regular", calibri_src),
+              ("Cambria", "Regular", pick("/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf") or calibri_src),
+              ("Marlett", "Regular", default_src),
+              ("MS UI Gothic", "Regular", msgothic_src),
+              ("Franklin Gothic", "Regular", default_src),
+          ]
+          for family, subfamily, src in families:
+              try:
+                  font = TTFont(str(src))
+              except Exception as exc:
+                  if exc.__class__.__name__ == "TTLibFileIsCollectionError":
+                      font = TTFont(str(src), fontNumber=0)
+                  else:
+                      raise
+              set_name(font, 1, family)
+              set_name(font, 2, subfamily)
+              set_name(font, 16, family)
+              set_name(font, 17, subfamily)
+              ps = family.replace(" ", "") + "-" + subfamily.replace(" ", "")
+              set_name(font, 6, ps)
+              font.save(str(out / f"{ps}.ttf"))
+          PY
+          fc-cache -f "$HOME/.local/share/fonts"
+
+      - name: Materialize private control configuration
+        if: steps.egress.outputs.admitted == 'true'
+        id: materialize
+        shell: bash
+        env:
+          SERVICE_ABUSE_BROWSER_ENV_B64: ${{ secrets.SERVICE_ABUSE_BROWSER_ENV_B64 }}
+          OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64: ${{ secrets.OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "${SERVICE_ABUSE_BROWSER_ENV_B64:-}"
+          test -n "${OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64:-}"
+          test -n "${SERVICE_ABUSE_EXPERIMENT_KEY:-}"
+          test -n "${GA_COORDINATOR_URL:-}"
+          test -n "${GA_COORDINATOR_TOKEN:-}"
+          private="$RUNNER_TEMP/service-abuse-auto-private"
+          mkdir -p "$private"
+          printf '%s' "$SERVICE_ABUSE_BROWSER_ENV_B64" | base64 --decode > "$private/browser-env.json"
+          printf '%s' "$OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64" | base64 --decode > "$private/outlook-email.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          private = Path(os.environ["RUNNER_TEMP"]) / "service-abuse-auto-private"
+          browser = json.loads(private.joinpath("browser-env.json").read_text(encoding="utf-8"))
+          cloak = browser.get("cloakbrowser") or {}
+          context = browser.get("context") or {}
+          args = [str(item) for item in (cloak.get("args") or [])]
+          valid = (
+              sum(item.startswith("--fingerprint=") for item in args) == 1
+              and "--fingerprint-platform=windows" in args
+              and sum(item.startswith("--window-size=") for item in args) == 1
+              and "viewport" in context
+              and context["viewport"] is None
+              and bool(context.get("locale"))
+              and bool(context.get("user_agent"))
+              and bool((context.get("extra_http_headers") or {}).get("Accept-Language"))
+              and (
+                  not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
+                  or bool(browser.get("proxy"))
+              )
+          )
+          if not valid:
+              raise SystemExit("Registration environment manifest is incomplete")
+          private.joinpath("secret.json").write_text(
+              json.dumps({"secret_key": os.environ["SERVICE_ABUSE_EXPERIMENT_KEY"]}),
+              encoding="utf-8",
+          )
+          PY
+          chmod 600 "$private"/*.json
+          echo "private_dir=$private" >> "$GITHUB_OUTPUT"
+
+      - name: Atomically lease oldest service-abuse account
+        if: steps.egress.outputs.admitted == 'true'
+        id: acquire
+        shell: bash
+        env:
+          LEASE_TTL_SECONDS: ${{ inputs.lease_ttl_seconds || '1500' }}
+          MAX_CANDIDATES: ${{ inputs.max_candidates || '500' }}
+        run: |
+          set -euo pipefail
+          private='${{ steps.materialize.outputs.private_dir }}'
+          safe="$RUNNER_TEMP/recovery-lease-safe.json"
+          .venv/bin/python -u tools/outlook_email_recovery_coordinator.py acquire \
+            --outlook-config "$private/outlook-email.json" \
+            --coordinator-url "$GA_COORDINATOR_URL" \
+            --request-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --run-id "$GITHUB_RUN_ID" \
+            --fixture-output "$private/fixture.json" \
+            --lease-output "$private/lease.json" \
+            --safe-output "$safe" \
+            --max-candidates "$MAX_CANDIDATES" \
+            --lease-ttl-seconds "$LEASE_TTL_SECONDS"
+          SAFE="$safe" python3 - <<'PY'
+          import json, os
+          row = json.load(open(os.environ["SAFE"], encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"leased={str(bool(row.get('leased'))).lower()}\n")
+              fh.write(f"account_id={int(row.get('account_id') or 0)}\n")
+              fh.write(f"attempt_number={int(row.get('attempt_number') or 0)}\n")
+          PY
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Run production recovery on fresh GA runner
+        if: steps.acquire.outputs.leased == 'true'
+        id: recovery
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          private='${{ steps.materialize.outputs.private_dir }}'
+          runtime="$GITHUB_WORKSPACE/.exact-5s-runtime"
+          result="$private/recovery-result.json"
+          safe="$RUNNER_TEMP/recovery-runtime-safe.json"
+          writeback_safe="$RUNNER_TEMP/recovery-writeback-safe.json"
+          log="$RUNNER_TEMP/recovery-runtime.log"
+          err="$RUNNER_TEMP/recovery-runtime.err.log"
+          test "$(git -C "$runtime" rev-parse HEAD)" = '00b68437e041cbdcee2be209a18d7a5592f4c2dd'
+          cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
+          cd "$runtime"
+          xvfb-run -a -s '-screen 0 2560x1440x24' \
+            "$GITHUB_WORKSPACE/.venv/bin/python" -u tools/service_abuse_recovery.py \
+              --fixture "$private/fixture.json" \
+              --secret-file "$private/secret.json" \
+              --output "$result" \
+              --safe-status-output "$safe" \
+              --profile-dir "$RUNNER_TEMP/service-abuse-auto-profile" \
+              --browser-config "$private/browser-env.json" \
+              --entry-url 'https://outlook.live.com/mail/0/?prompt=select_account' \
+              --timeout-seconds 720 \
+              --omit-email-output \
+              --require-service-abuse-preflight \
+              --semiprotocol-human \
+              --parent-retry-max 2 \
+              --semiprotocol-server-challenge-rounds 8 \
+              --semiprotocol-out-dir "$RUNNER_TEMP/service-abuse-auto-semiprotocol" \
+              --writeback-outlook-email \
+              --outlook-email-config "$private/outlook-email.json" \
+              --outlook-email-writeback-safe-output "$writeback_safe" \
+              >"$log" 2>"$err"
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "safe_status=$safe" >> "$GITHUB_OUTPUT"
+          echo "writeback_safe=$writeback_safe" >> "$GITHUB_OUTPUT"
+          if [ -f "$log" ]; then
+            grep -E '^\[recovery\]|^\[Captcha\]|SERVICE_ABUSE|RISK_VERIFY|PREFLIGHT|HUMAN_' "$log" \
+              | head -n 100 || true
+          fi
+          if [ -f "$err" ]; then
+            tail -n 40 "$err" || true
+          fi
+          exit "$code"
+
+      - name: Complete recovery lease and classify retry
+        if: always() && steps.acquire.outputs.leased == 'true'
+        id: complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          private='${{ steps.materialize.outputs.private_dir }}'
+          safe_status='${{ steps.recovery.outputs.safe_status }}'
+          if [ -z "$safe_status" ]; then
+            safe_status="$RUNNER_TEMP/recovery-runtime-safe.json"
+          fi
+          completion="$RUNNER_TEMP/recovery-completion-safe.json"
+          .venv/bin/python -u tools/outlook_email_recovery_coordinator.py complete \
+            --outlook-config "$private/outlook-email.json" \
+            --coordinator-url "$GA_COORDINATOR_URL" \
+            --lease-input "$private/lease.json" \
+            --safe-status "$safe_status" \
+            --safe-output "$completion"
+          echo "safe=$completion" >> "$GITHUB_OUTPUT"
+
+      - name: Build redacted automatic-recovery verdict
+        if: always()
+        shell: bash
+        env:
+          EGRESS_ADMITTED: ${{ steps.egress.outputs.admitted }}
+          EGRESS_SHA16: ${{ steps.egress.outputs.egress_sha16 }}
+          EGRESS_PREFIX: ${{ steps.egress.outputs.egress_prefix }}
+          EGRESS_REASON: ${{ steps.egress.outputs.reason }}
+          LEASE_SAFE: ${{ steps.acquire.outputs.safe }}
+          RUNTIME_SAFE: ${{ steps.recovery.outputs.safe_status }}
+          WRITEBACK_SAFE: ${{ steps.recovery.outputs.writeback_safe }}
+          COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          def load(path):
+              if not path:
+                  return {}
+              candidate = Path(path)
+              if not candidate.exists():
+                  return {}
+              try:
+                  value = json.loads(candidate.read_text(encoding="utf-8"))
+                  return value if isinstance(value, dict) else {}
+              except Exception:
+                  return {}
+
+          lease = load(os.environ.get("LEASE_SAFE", ""))
+          runtime = load(os.environ.get("RUNTIME_SAFE", ""))
+          writeback = load(os.environ.get("WRITEBACK_SAFE", ""))
+          completion = load(os.environ.get("COMPLETION_SAFE", ""))
+          verdict = {
+              "schema": 1,
+              "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+              "runner": "ubuntu-22.04",
+              "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
+              "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
+              "egress_prefix": os.environ.get("EGRESS_PREFIX") or None,
+              "egress_reason": os.environ.get("EGRESS_REASON") or None,
+              "leased": bool(lease.get("leased")),
+              "account_id": int(lease.get("account_id") or 0) or None,
+              "attempt_number": int(lease.get("attempt_number") or 0) or None,
+              "candidate_count": int(lease.get("candidate_count") or 0),
+              "lease_sha12": lease.get("lease_sha12") or None,
+              "service_abuse_cleared": bool(runtime.get("service_abuse_cleared")),
+              "graph_ok": bool(runtime.get("graph_ok")),
+              "production_writeback_ok": bool(runtime.get("production_writeback_ok")),
+              "production_health_enrolled": bool(runtime.get("production_health_enrolled")),
+              "writeback_post_refresh_token_present": bool(writeback.get("post_refresh_token_present")),
+              "outcome": completion.get("outcome") or None,
+              "error_code": completion.get("error_code") or runtime.get("error_code") or "",
+              "exhausted": bool(completion.get("exhausted")),
+          }
+          out = Path(os.environ["RUNNER_TEMP"]) / "ga-auto-recovery-verdict.json"
+          out.write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(verdict, ensure_ascii=False))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("## Automatic service-abuse recovery\n\n```json\n")
+              fh.write(json.dumps(verdict, ensure_ascii=False, indent=2))
+              fh.write("\n```\n")
+          PY
+
+      - name: Upload redacted automatic-recovery verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-auto-recovery-safe-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/ga-auto-recovery-verdict.json
+            ${{ runner.temp }}/recovery-egress-safe.json
+            ${{ steps.acquire.outputs.safe }}
+            ${{ steps.recovery.outputs.safe_status }}
+            ${{ steps.recovery.outputs.writeback_safe }}
+            ${{ steps.complete.outputs.safe }}
+
+      - name: Cleanup private recovery material
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/service-abuse-auto-private" \
+            "$RUNNER_TEMP/service-abuse-auto-profile" \
+            "$RUNNER_TEMP/service-abuse-auto-semiprotocol" \
+            "$GITHUB_WORKSPACE/.exact-5s-runtime" \
+            .tmp/service-abuse-diagnostics || true
