@@ -367,7 +367,75 @@ The wrapper now passes both `--final-proof-normalizer minimal_natural_hold` and
 `--fresh-final-proof-normalizer ads_safe`. The switch occurs in the existing
 controller callback before the fresh shell is created; tests verify the shared
 route state mutates in place. Post-primary final retries remain disabled, so
-each fresh challenge still sends one real decisive final. If the isolated
-ADS-safe fresh final remains rejected, the next variables are, in order,
-skipping mid-probe snapshots and then allowing a second real hold attempt. The
-deadline should not be increased again.
+each fresh challenge still sends one real decisive final. The next run must
+first establish the isolated ADS-safe fresh-final shape before changing hold
+attempts or timing. The deadline should not be increased again.
+
+## Phase isolation works, but ADS-safe alone does not recover fresh challenges
+
+Run `29383097336` first used 20 slots as a smoke test for source `b8cee97`:
+
+```text
+20 dispatched
+ 10 egress-denylist skips
+ 10 live probes
+    8 accepted initial result|0
+    6 strict CreateAccount
+    6 Graph healthy
+    1 accepted proof -> explicit riskBlock
+    1 accepted proof -> fresh absolute timeout
+    2 pre-proof explicit riskBlock
+```
+
+The fresh slot recorded the intended transition
+`minimal_natural_hold -> ads_safe`; its initial natural final returned
+`result|0`. All three fresh invocations passed readiness, but none emitted a
+decisive PX561. This proved the initial regression was fixed but did not yet
+test an ADS-safe fresh final.
+
+Run `29383601440` then supplied the required fresh-final sample:
+
+```text
+50 dispatched
+ 25 egress-denylist skips
+ 25 live probes
+   24 accepted initial result|0
+   16 strict CreateAccount
+   16 Graph healthy
+    3 fresh absolute timeout
+    2 fresh rounds exhausted without CreateAccount
+    3 accepted proof -> explicit riskBlock
+    1 pre-proof explicit riskBlock
+```
+
+Rates:
+
+```text
+raw strict                 16/50 = 32.0%
+live-probe strict           16/25 = 64.0%
+accepted-checkpoint strict  16/24 = 66.7%
+Graph after creation        16/16 = 100%
+Graph healthy / run minute  16/12.62 = 1.268/min
+```
+
+All five fresh slots switched only after the accepted initial proof. Across 15
+fresh invocations, all 15 readiness gates passed; 14 emitted an ADS-safe PX561
+and all 14 returned `result|-1`. One invocation produced no decisive final.
+There was no fresh `result|0`, `risk/verify -> continue`, or CreateAccount.
+
+The closest rejected no-BFA packet and the accepted local exact-fresh reference
+already match on event order, logical hold (`z=13500`), `r3-ui`, and seven-event
+Dz shape. Their largest scalar divergence is:
+
+```text
+rejected fresh finals: XGhm=21.9..57.3, Bzt=3018..34189
+accepted reference:    XGhm≈87.6,      Bzt≈517
+```
+
+Source `ae0745a95f73bec3ab24b9a5ce461bae1fa4a371` therefore tests one
+new primary shape only on fresh PX561: `XGhm=84.2..90.2` plus the existing
+low-Bzt/STk accepted band. It does not alter the initial natural proof, does not
+increase the deadline, and does not send post-primary variants after a reject.
+If this primary scalar anchor also fails, repeated fresh salvage should be
+removed from the production throughput path and retained only as an explicit
+research variant.
