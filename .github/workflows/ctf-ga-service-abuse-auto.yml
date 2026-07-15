@@ -20,13 +20,13 @@ on:
         required: true
         default: "[1]"
       natural_final_proof_mode:
-        description: "Natural-hold final PX561 treatment: minimal=registration path, off=prior recovery control"
+        description: "Natural-hold final PX561 treatment: minimal, ads_safe, or off control"
         required: true
         default: "minimal"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "7a121f5890072d57646ea10ca7ba06d5107defc9"
+        default: "986a76d0cd2bdd81bcd42f33007e5da257659bc2"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -88,8 +88,8 @@ jobs:
           if not valid:
               raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
           mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
-          if mode not in {"minimal", "off"}:
-              raise SystemExit("natural_final_proof_mode must be minimal or off")
+          if mode not in {"minimal", "ads_safe", "off"}:
+              raise SystemExit("natural_final_proof_mode must be minimal, ads_safe, or off")
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"natural final proof mode={mode}")
           PY

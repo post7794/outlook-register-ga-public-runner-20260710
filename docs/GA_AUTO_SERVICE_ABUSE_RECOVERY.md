@@ -69,7 +69,9 @@ hold envelope and first-hold warmup, but deliberately keeps `hold_retries=1`;
 Microsoft parent-page Retry remains bounded at two and iframe Retry is never
 clicked. `natural_final_proof_mode=minimal` also restores the registration
 path's narrow live PX561 normalizer; `off` retains the earlier timing-only
-recovery control. Neither mode rewrites a collector response. The accelerated
+recovery control. `ads_safe` is the recovery-shaped treatment that preserves
+and narrowly normalizes BFA/final telemetry. None of these modes rewrites a
+collector response. The accelerated
 5s path remains available for experiments but is not
 the automatic-recovery production path because it recovered 0/6 GA fresh
 challenge slots in the latest registration validation.
@@ -101,7 +103,8 @@ job_slots_json=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 The input accepts 1-20 unique integer slots in the range 1-20. Redacted
 artifacts are named `ga-auto-recovery-safe-<run_id>-<slot>` so every slot can
 be audited independently. Set `natural_final_proof_mode=minimal` for the
-registration-equivalent treatment or `off` for the prior live-payload control.
+registration-equivalent treatment, `ads_safe` for the recovery-shaped BFA
+treatment, or `off` for the prior live-payload control.
 Keep the defaults `[1]` and `minimal` for scheduled operation.
 
 Keep the variable `false` during deployment and smoke validation. Enable it
