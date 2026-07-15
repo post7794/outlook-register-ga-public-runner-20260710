@@ -72,3 +72,105 @@ per_ip_max_registrations=1
 source pins CloakBrowser 0.3.32, while the current prebuilt cache contains
 0.4.8. Cache migration should be a separate variable after the captcha path is
 measured.
+
+## Exact 5s result: captcha accepted, account creation rejected
+
+Run `29376059630` completed with:
+
+```text
+20 dispatched
+13 egress-denylist skips
+ 7 live probes
+   5 collector result|0 on both HumanCaptcha rounds, then risk/verify 403
+   1 pre-proof explicit riskBlock
+   1 username unavailable
+ 0 strict CreateAccount
+```
+
+The five post-proof failures all followed the same server sequence:
+
+```text
+risk/initialize 200
+risk/verify 200 -> HumanCaptcha
+collector result|0
+risk/verify 200 -> fresh HumanCaptcha
+collector result|0
+risk/verify 403 -> riskBlock
+```
+
+Therefore the exact 5s primitive is effective at the hsprotect collector
+boundary, including a fresh challenge, but the complete historical bundle is
+not a production registration replacement. `collector result|0` is only proof
+acceptance by the captcha collector; Microsoft still makes a separate
+`risk/verify` decision. The live egress families in this run include families
+that created accounts at high rates under the current online-ADS variant, so
+classifying all five outcomes as an IP-only regression would overstate the
+evidence. Browser identity, proof shape, and host handoff remain coupled in the
+exact historical variant.
+
+## Extending the fresh deadline does not recover the second challenge
+
+Run `29376810902` kept the current online-ADS source, CloakBrowser 0.4.8,
+natural first proof, coordinator policy, and hold settings. The controlled
+change was only:
+
+```text
+fresh absolute deadline: 60s -> 180s
+```
+
+Result:
+
+```text
+100 dispatched
+ 59 egress-denylist skips
+ 41 live probes
+   29 strict CreateAccount
+   29 Graph healthy
+    7 accepted first proof -> fresh challenge -> 180s timeout
+    3 pre-proof explicit riskBlock
+    1 accepted proof -> explicit riskBlock
+    1 username unavailable
+```
+
+Rates with explicit denominators:
+
+```text
+raw strict                 29/100 = 29.0%
+live-probe strict           29/41 = 70.7%
+accepted-checkpoint strict  29/37 = 78.4%
+Graph after creation        29/29 = 100%
+```
+
+Decrypted traces settle the mechanism:
+
+- all 29 strict successes had one `collector result|0` and
+  `riskChallengeRequired -> continue`;
+- none of the 29 strict successes traversed a second HumanCaptcha;
+- all seven timeout slots had an initial `result|0`, received a fresh
+  HumanCaptcha, then produced only `result|-1` on the fresh natural holds;
+- all seven reached the 180-second deadline at `post_wait`, after one to three
+  failed fresh proofs.
+
+So the 60-second watchdog was exposing the failure early, not causing it.
+Increasing it to 180 seconds spends more runner time on already rejected fresh
+proofs and did not demonstrate a single fresh-challenge recovery.
+
+## Next controlled change: natural first proof, 5s fresh proof only
+
+The next variant targets the actual failed edge instead of replacing the whole
+registration path:
+
+```text
+variant=online_ads_ga_fresh_5s_recovery
+private source=bdd2ef985f560a7a7a13685a6389ac3711af5cfc
+initial HumanCaptcha=unchanged natural online-ADS path
+fresh HumanCaptcha=late-installed 15s logical / 6.5s wall handler
+browser/config/final normalizer=unchanged online-ADS production values
+```
+
+The handler is invocation-gated: the first `handle_captcha` call always uses
+the natural implementation; only a Microsoft re-issued HumanCaptcha uses the
+5s primitive. This preserves the path responsible for all 29 current strict
+successes while testing whether the historical primitive can convert the
+fresh-round `result|-1` cluster into `result|0` without importing the old
+CloakBrowser 0.3.32 identity bundle.
