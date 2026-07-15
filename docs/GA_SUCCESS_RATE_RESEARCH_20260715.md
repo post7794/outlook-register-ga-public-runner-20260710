@@ -648,3 +648,41 @@ finished.
   `13/48` accepted initial proofs. Existing deep-fresh experiments still show
   zero end-to-end CreateAccount recoveries, so fast-fail remains the production
   policy.
+
+## Accepted initial proof: continue versus fresh-challenge analysis
+
+To test whether the `13/48` fresh branch can be reduced by changing the known
+good initial proof, initial `result|0` finals were joined across six
+production-like runs:
+
+```text
+runs: 29338532443, 29347583690, 29376810902,
+      29380273787, 29385796706, 29406813243
+strict continue/CreateAccount samples: 145
+fresh HumanCaptcha samples:             46
+```
+
+Numeric PX561, timing, packet-shape, hold, attempt, and coordinator-wait fields
+were standardized within each run. Labels were then permuted within each run
+5,000 times, avoiding a false result caused only by run-to-run pool changes.
+No visible field supplied a production-grade separator:
+
+| feature | observation | stratified permutation p | decision |
+|---------|-------------|--------------------------:|----------|
+| pre-normalizer JnP length | pooled medians equal | 0.0616 | not actionable |
+| pre-normalizer `r3-ui` | fresh slightly lower | 0.0672 | after-normalizer value is identical |
+| Bzt | strict median 19,592; fresh 15,358 | 0.1082 | overlapping, not decisive |
+| XGhm | effectively identical | >0.4 | reject as predictor |
+| hold duration / coordinator wait | overlapping | >0.2 / >0.5 | reject as predictor |
+
+No stable pure-failure ADS template or allowed egress family also reproduced at
+sufficient N. Therefore the observed initial proof fields do not justify
+mutating the path that already accepts `94.1%` of live slots. The fresh branch
+is best treated as a host/session risk decision: stop that session and backfill
+with a new runner. This is more evidence-based than fitting another scalar to a
+post-proof decision that the captured packet does not predict.
+
+Run `29409529013` subsequently smoke-tested the updated ingestion workflow. All
+ten public verdicts contained `graph_import_attempts`; both strict accounts were
+Graph healthy on attempt one, and no workflow/runtime syntax regression was
+observed.
