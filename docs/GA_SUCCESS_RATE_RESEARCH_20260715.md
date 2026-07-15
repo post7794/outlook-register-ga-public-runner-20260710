@@ -507,3 +507,54 @@ Graph healthy / minute
 It must also verify that initial accepted-proof rate and Graph health after
 creation do not regress. A lower wall time alone is not sufficient if it
 damages the one-challenge path.
+
+## Production fast-fail comparison
+
+Run `29385796706` held the scalar experiment's matrix size, ten-way
+parallelism, final-only coordinator, prebuilt runtime, and 300-second external
+deadline constant. It changed the source to `875b057` and selected
+`online_ads_ga_production_fast_fail`:
+
+```text
+30 dispatched
+ 14 egress-denylist skips
+ 16 live probes
+   14 accepted initial result|0
+    8 strict CreateAccount
+    8 Graph healthy
+    5 accepted proof -> explicit riskBlock
+    2 pre-proof explicit riskBlock
+    1 accepted proof -> fresh HumanCaptcha -> policy skip
+```
+
+The controlled outcome is:
+
+```text
+                             deep fresh     production fast-fail
+initial result|0                 14                  14
+strict CreateAccount              8                   8
+Graph healthy                     8                   8
+run duration                 14.07 min            7.93 min
+Graph healthy/min              0.569               1.008
+```
+
+That is a `43.6%` wall-time reduction and a `77.3%` increase in healthy
+mailboxes per run minute for this matched 30-slot comparison, with no loss at
+the accepted-proof, CreateAccount, or Graph-health checkpoints.
+
+Decrypted slot 18 verifies the intended branch rather than an accidental early
+exit:
+
+```text
+initial final: minimal_natural_hold -> collector result|0
+risk/verify: HTTP 200, state=riskChallengeRequired,
+             challengeType=HumanCaptcha
+fresh_rechallenge_policy_skip: max_rounds=0
+fresh handler invocations: 0
+fresh PX561 finals: 0
+```
+
+The policy therefore preserves the proven first HumanCaptcha path and removes
+only the repeatedly unproductive fresh salvage work. This is now the preferred
+production variant; `online_ads_ga_fresh_5s_recovery` remains a research-only
+control.

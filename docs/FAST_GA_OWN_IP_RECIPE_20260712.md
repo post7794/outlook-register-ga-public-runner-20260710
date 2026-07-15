@@ -1,4 +1,4 @@
-# Fast GA own-IP recipe (2026-07-12)
+# Fast GA own-IP recipe (updated 2026-07-15)
 
 ## Wall-clock bottlenecks fixed
 
@@ -17,10 +17,12 @@
 
 ```text
 node_slots_json=[1..50]
-egress_prefix_denylist=4.,13.,20.,40.,52.,68.
+egress_prefix_denylist=4.,13.,20.,40.,52.,68.,74.249.
 slot_stagger_seconds=12
 max_parallel=20
-variant=online_ads_ga_fresh_rechallenge
+variant=online_ads_ga_production_fast_fail
+coordinator_mode=final_only
+runtime_mode=prebuilt
 ```
 
 Expected wall clock: roughly **12-18 min** vs previous ~34 min for 36-slot denylist runs,
@@ -29,5 +31,10 @@ assuming similar skip ratio.
 ## Do not cut first for speed
 
 - hold_retries=3 (collector acceptance)
-- isolation fresh rechallenge path
-- denylist 4./13./20./40./52./68. (IP quality)
+- initial natural HumanCaptcha path
+- final-only coordinator
+- recommended denylist (IP quality)
+
+The three-round fresh-challenge handler is now research-only. Matched run
+`29385796706` kept 8 Graph-healthy accounts while reducing wall time from
+14.07 to 7.93 minutes by setting the production fresh-round budget to zero.

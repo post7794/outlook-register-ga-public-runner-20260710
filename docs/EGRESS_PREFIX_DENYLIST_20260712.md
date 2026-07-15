@@ -31,7 +31,7 @@ Sample base: 66 IPs with safe verdicts joined.
 ## Hard denylist (recommended)
 
 ```text
-4.,13.,20.,40.,52.,68.
+4.,13.,20.,40.,52.,68.,74.249.
 ```
 
 Evidence:
@@ -42,6 +42,17 @@ Evidence:
 | 52. | 10 | 10 | 0 | 0 |
 
 Both meet the handoff rule at high n: >=3 samples, 100% entry riskBlock, 0 result0, 0 strict.
+
+The joined production-like runs `29338532443`, `29347583690`, `29376810902`,
+`29380273787`, and `29385796706` add one narrower range that meets the same
+rule without excluding the successful remainder of its `/8` family:
+
+| prefix | n | runs | entry riskBlock | strict | result0 |
+|--------|--:|-----:|----------------:|-------:|--------:|
+| 74.249. | 3 | 2 | 3 | 0 | 0 |
+
+The sibling range `74.235.` remains successful (`4/4` strict in the joined
+sample), so `74.` must not be denied as a whole.
 
 Do **not** treat this as a permanent global ban forever; refresh after each major Azure GA pool shift.
 
@@ -56,7 +67,7 @@ Do **not** treat this as a permanent global ban forever; refresh after each majo
 
 ## Operational recipe
 
-1. Pass denylist into workflow input `egress_prefix_denylist=4.,13.,20.,40.,52.,68.`
+1. Pass denylist into workflow input `egress_prefix_denylist=4.,13.,20.,40.,52.,68.,74.249.`
 2. Over-provision candidates so skipped IPs do not starve live count:
    - target ~20 live probes
    - start ~50 matrix slots (`node_slots_json=[1..50]`)
