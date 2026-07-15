@@ -731,3 +731,10 @@ Run `29416856621` then dispatched ten slots while overriding only
 them as explicit inputs. It produced five strict / five Graph-healthy accounts;
 all ten verdicts contained the new coordinator fields, seven slots made eight
 final reservations, and every observed reservation reported `gap_ms=12000`.
+
+Run `29417330058` subsequently dispatched with no input overrides at all. Its
+five verdicts self-reported the intended defaults (`production_fast_fail`,
+`final_only`, `max_parallel=20`, prebuilt, `18/30` minute probe/job timeouts),
+observed the 12-second final gap, and produced two strict / two Graph-healthy
+accounts. This closes the gap between the documented production recipe and the
+actual workflow-dispatch defaults.
