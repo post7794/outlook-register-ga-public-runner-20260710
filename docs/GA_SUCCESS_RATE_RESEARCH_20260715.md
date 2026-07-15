@@ -219,3 +219,61 @@ raises only the fresh server-round budget from two to three. The follow-up must
 use the existing 300-second absolute ceiling; the accepted second fresh proof
 arrived with too little of the previous 180-second budget left for a third
 round.
+
+## Three fresh rounds do not by themselves improve end-to-end recovery
+
+Run `29380273787` tested source `83a642e` with a 300-second absolute fresh
+deadline and three fresh server rounds:
+
+```text
+50 dispatched
+ 25 egress-denylist skips
+ 25 live probes
+   19 strict CreateAccount
+   16 Graph healthy
+    3 created, ingest endpoint returned HTTP 404
+    2 pre-proof explicit riskBlock
+    2 accepted first proof -> explicit riskBlock
+    2 accepted first proof -> fresh challenge -> no strict CreateAccount
+```
+
+Both fresh slots executed all three permitted rounds, but all six fresh
+collector responses were `result|-1`. All 19 strict creations still followed
+the one-challenge path `riskChallengeRequired -> continue`; none was recovered
+from a second HumanCaptcha. Therefore increasing only the round/deadline budget
+does not repair the proof shape and consumes runner time without adding healthy
+accounts.
+
+The three ingest failures are not Graph-auth failures. Their registration
+completed, but the shared `/outlook-email/api/external/outlook/import-authorize`
+route returned HTTP 404 during a short hourly nginx reconfiguration window.
+They remain separate from captcha success-rate analysis.
+
+## Next controlled source: exact guards only on the fresh handler
+
+The next source pin is `b80b75375a0925b0fa3e80f962f7014ecfe5d495`.
+It leaves the initial natural HumanCaptcha path unchanged and changes only the
+fresh time-warp handler:
+
+- non-target requests in the fresh route injector use `route.fallback()` so
+  the existing online-ADS normalizer remains in the route chain;
+- PX1200 timing normalization and PX561 alignment are enabled;
+- the KNP sandbox event, exact KNP wait/grace, U0 lead, and pre-hold readiness
+  gates match the previously successful exact-proof primitive;
+- the wall hold remains 6.5 seconds, with one attempt per Microsoft-issued
+  fresh challenge and a maximum of three fresh server rounds.
+
+The decisive measurement is not overall workflow green or collector
+`result|0`. It is the fresh-only funnel:
+
+```text
+fresh PX561 final
+-> fresh collector result|0
+-> risk/verify continue
+-> strict CreateAccount
+-> Graph healthy
+```
+
+Only if the exact guards still produce repeated fresh `result|-1` should the
+next isolated variable be `time-warp-attempts=2`; the deadline should not be
+increased again.
