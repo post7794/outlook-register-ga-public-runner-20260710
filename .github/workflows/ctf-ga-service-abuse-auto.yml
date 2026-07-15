@@ -34,7 +34,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "4daefd8ab5a9dcbe82b6e234a7eb53e3625da202"
+        default: "d5662d02ff7948cddbbe305c3b339a7f9879dd69"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -381,7 +381,9 @@ jobs:
             natural_bridge_args+=(--natural-w0-bridge)
           fi
           test "$(git -C "$runtime" rev-parse HEAD)" = '875b0571d5b9c88b89a5bbc64f30488ee9565962'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'c26afdff9ea61fea2a467dfdd02c800ddf697f62'
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
+          cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/protocol_runtime_probe.py"
           cd "$runtime"
           xvfb-run -a -s '-screen 0 2560x1440x24' \
             "$GITHUB_WORKSPACE/.venv/bin/python" -u tools/service_abuse_recovery.py \

@@ -63,9 +63,14 @@ Public execution workflow: `.github/workflows/ctf-ga-service-abuse-auto.yml`.
 It checks out the pinned private recovery-control source from
 `xbox-cn/outlook-register-ga-xvfb-action-20260707` before any account work.
 
-The browser runtime is pinned to registration production commit
-`875b0571d5b9c88b89a5bbc64f30488ee9565962`. Recovery uses the same natural
-hold envelope and first-hold warmup, but deliberately keeps `hold_retries=1`;
+The browser/controller runtime is pinned to registration production commit
+`875b0571d5b9c88b89a5bbc64f30488ee9565962`. Recovery overlays the
+`service-abuse-recovery-v1.0.0` protocol runtime blob
+`c26afdff9ea61fea2a467dfdd02c800ddf697f62`; this retains registration's
+natural hold implementation while restoring the recovery-specific early-W0
+pending route. Both object ids are checked before account work. Recovery uses
+the same natural hold envelope and first-hold warmup, but deliberately keeps
+`hold_retries=1`;
 Microsoft parent-page Retry remains bounded at two and iframe Retry is never
 clicked. `natural_final_proof_mode=minimal` also restores the registration
 path's narrow live PX561 normalizer; `off` retains the earlier timing-only
@@ -91,6 +96,12 @@ When `natural_server_challenge_rounds` is above one, another hold is allowed
 only after the current round records collector `result|0` and a later real
 `risk/verify` response issues a new HumanCaptcha continuation. A `result|-1`,
 `HumanCaptcha_Failure`, or a plain visible iframe Retry never opens a round.
+
+The overlay is required by runtime evidence: the registration-only protocol
+blob fulfilled W0-before-final immediately as neutral, so only 1/6 natural W0
+bridge attempts reached `result|0`. The recovery release keeps that actual W0
+request pending until the final handler can resolve it, without changing the
+9.5-12.5s physical hold.
 
 The private repository retains the canonical recovery source and an equivalent
 workflow template, but its organization currently cannot allocate hosted
