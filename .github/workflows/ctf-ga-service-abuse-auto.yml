@@ -15,10 +15,14 @@ on:
         description: "Oldest quarantined service-abuse accounts offered to the coordinator"
         required: true
         default: "500"
+      job_slots_json:
+        description: "Bounded fresh-runner slots; use [1] normally or [1..20] for a batch"
+        required: true
+        default: "[1]"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "424199030eddd62c7d7152551b115c4d8ada6db5"
+        default: "5277174c4b9686f1818815a38e3788c0cadfed07"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -35,7 +39,13 @@ permissions:
 
 jobs:
   recover:
+    name: recover (${{ matrix.slot }})
     if: github.event_name == 'workflow_dispatch' || vars.SERVICE_ABUSE_AUTO_ENABLED == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        slot: ${{ fromJSON(inputs.job_slots_json || '[1]') }}
     runs-on: ubuntu-22.04
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
     env:
@@ -44,6 +54,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
+      RECOVERY_SLOT: ${{ matrix.slot }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -51,6 +62,28 @@ jobs:
         run: |
           echo "Automatic recovery runs may not be re-run; dispatch a fresh runner instead." >&2
           exit 1
+
+      - name: Validate bounded recovery matrix
+        shell: bash
+        env:
+          JOB_SLOTS_JSON: ${{ inputs.job_slots_json || '[1]' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          slots = json.loads(os.environ["JOB_SLOTS_JSON"])
+          current = int(os.environ["RECOVERY_SLOT"])
+          valid = (
+              isinstance(slots, list)
+              and 1 <= len(slots) <= 20
+              and all(type(item) is int and 1 <= item <= 20 for item in slots)
+              and len(set(slots)) == len(slots)
+              and current in slots
+          )
+          if not valid:
+              raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
+          print(f"recovery matrix slot={current} count={len(slots)}")
+          PY
 
       - name: Checkout private recovery control plane
         uses: actions/checkout@v4
@@ -284,8 +317,8 @@ jobs:
           .venv/bin/python -u tools/outlook_email_recovery_coordinator.py acquire \
             --outlook-config "$private/outlook-email.json" \
             --coordinator-url "$GA_COORDINATOR_URL" \
-            --request-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --run-id "$GITHUB_RUN_ID" \
+            --request-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RECOVERY_SLOT}" \
+            --run-id "${GITHUB_RUN_ID}-${RECOVERY_SLOT}" \
             --fixture-output "$private/fixture.json" \
             --lease-output "$private/lease.json" \
             --safe-output "$safe" \
@@ -451,6 +484,7 @@ jobs:
           verdict = {
               "schema": 1,
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+              "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "runner": "ubuntu-22.04",
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
@@ -483,7 +517,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ga-auto-recovery-safe-${{ github.run_id }}
+          name: ga-auto-recovery-safe-${{ github.run_id }}-${{ matrix.slot }}
           retention-days: 14
           if-no-files-found: error
           path: |

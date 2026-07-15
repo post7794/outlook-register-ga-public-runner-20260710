@@ -20,10 +20,13 @@ fresh ubuntu-22.04 runner
 -> cleanup all private material
 ```
 
-One workflow run uses one fresh GitHub-hosted runner and at most one account.
-A retry therefore necessarily receives a different GA runner/egress. The
-repository-wide concurrency group prevents overlapping scheduled runs, while
-the server lease also protects against manual or cross-run duplication.
+One matrix slot uses one fresh GitHub-hosted runner and at most one account.
+Scheduled and ordinary manual runs default to the single slot `[1]`; a manual
+batch may supply up to 20 unique slots and run them in parallel. A retry must
+be a new dispatch and therefore receives a different GA runner/egress. The
+repository-wide concurrency group prevents separate workflow runs from
+overlapping, while per-slot request/run ids and the server lease prevent
+duplicate account work inside a matrix batch.
 
 ## Coordinator contract
 
@@ -80,6 +83,16 @@ Manual dispatch always runs. The 15-minute schedule is fail-closed behind:
 ```text
 SERVICE_ABUSE_AUTO_ENABLED=true
 ```
+
+For a bounded 20-runner validation batch, dispatch with:
+
+```text
+job_slots_json=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+```
+
+The input accepts 1-20 unique integer slots in the range 1-20. Redacted
+artifacts are named `ga-auto-recovery-safe-<run_id>-<slot>` so every slot can
+be audited independently. Keep the default `[1]` for scheduled operation.
 
 Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,
