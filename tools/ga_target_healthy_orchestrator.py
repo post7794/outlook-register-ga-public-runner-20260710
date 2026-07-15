@@ -340,6 +340,8 @@ def summarize_verdicts(
             "pre_first_hold_warmup_ms": unique_values(
                 rows, "pre_first_hold_warmup_ms"
             ),
+            "signup_country_policy": unique_values(rows, "signup_country_policy"),
+            "signup_country_code": unique_values(rows, "signup_country_code"),
             "coordinator_mode": unique_values(rows, "coordinator_mode"),
             "max_parallel": unique_values(rows, "max_parallel"),
             "runtime_mode": unique_values(rows, "runtime_mode"),

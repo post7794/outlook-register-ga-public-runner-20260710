@@ -881,3 +881,20 @@ The 14-second treatment is rejected and production remains `fixed_input` with
 the checked-in 22-second warmup. No claim is made that 22 seconds is globally
 optimal; this experiment only shows that shortening it to 14 seconds did not
 raise end-to-end strict or Graph-healthy conversion.
+
+## Next conversion hypothesis: signup-country consistency
+
+The warmup run exposed a more direct host-risk input. All 43 admitted browser
+environments reported locale `en-US`, while all 43 first signup risk signatures
+sent `countryCode=LK`. The pinned production source uses `LK` as its protocol
+default, and the same value is later sent as CreateAccount `Country`. This field
+therefore reaches both the pre-captcha host-risk decision and account creation;
+it is not merely presentation metadata.
+
+The workflow now offers a blocked `country_ab_us_lk_v1` experiment. It compares
+an explicit `US` treatment with the exact `LK` control while leaving the 22s
+warmup, ADS round-robin, egress policy, proof path, coordinator, and fresh
+fast-fail unchanged. It uses the same 35-profile blocked assignment as the
+warmup experiment. Enabling both experiments together is rejected to prevent a
+two-variable run. Production remains `signup_country_policy=source_default`
+until a prospective Graph-healthy result justifies changing it.

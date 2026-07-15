@@ -31,6 +31,8 @@ def verdict(attempt, category, *, marker="target-b001", **overrides):
         "fresh_session_restart_policy": "off",
         "pre_first_hold_warmup_policy": "fixed_input",
         "pre_first_hold_warmup_ms": None,
+        "signup_country_policy": "source_default",
+        "signup_country_code": None,
         "coordinator_mode": "final_only",
         "max_parallel": 20,
         "runtime_mode": "prebuilt",
@@ -154,6 +156,10 @@ class VerdictSummaryTests(unittest.TestCase):
         self.assertEqual(
             summary["observed_config"]["pre_first_hold_warmup_ms"], [None]
         )
+        self.assertEqual(
+            summary["observed_config"]["signup_country_policy"], ["source_default"]
+        )
+        self.assertEqual(summary["observed_config"]["signup_country_code"], [None])
         self.assertAlmostEqual(summary["graph_healthy_per_min"], 0.1)
 
     def test_rejects_wrong_orchestration_marker(self):

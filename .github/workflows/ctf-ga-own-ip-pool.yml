@@ -109,6 +109,16 @@ on:
           - warmup_ab_14s_22s_v1
           - warmup_14s_v1
           - warmup_22s_v1
+      signup_country_policy:
+        description: "Protocol/CreateAccount country: source default, blocked US-vs-LK A/B, or one explicit arm"
+        required: true
+        default: source_default
+        type: choice
+        options:
+          - source_default
+          - country_ab_us_lk_v1
+          - country_us_v1
+          - country_lk_v1
       slot_stagger_seconds:
         description: "Stagger only probe-bound slots after denylist: delay=((attempt-1)%max_parallel)*seconds. Use 10-15 for speed, 30 for max isolation, 0 for concurrent."
         required: true
@@ -1011,6 +1021,7 @@ jobs:
         env:
           PRE_FIRST_HOLD_WARMUP_POLICY: ${{ inputs.pre_first_hold_warmup_policy }}
           PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
+          SIGNUP_COUNTRY_POLICY: ${{ inputs.signup_country_policy }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'online_ads_ga_production_fast_fail' && '0' || '' }}
           FRESH_SESSION_RESTART_POLICY: ${{ inputs.fresh_session_restart_policy }}
@@ -1058,6 +1069,10 @@ jobs:
               exit 2
             fi
           fi
+          if [ "$warmup_policy" != "fixed_input" ] && [ "$SIGNUP_COUNTRY_POLICY" != "source_default" ]; then
+            echo "warmup and signup-country experiments cannot be enabled together" >&2
+            exit 2
+          fi
           export OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS="$warmup_ms"
           WARMUP_POLICY="$warmup_policy" \
           WARMUP_ARM="$warmup_arm" \
@@ -1083,11 +1098,72 @@ jobs:
           )
           print(json.dumps(row, ensure_ascii=False))
           PY
+          country_policy="$SIGNUP_COUNTRY_POLICY"
+          country_arm="source_default"
+          country_code=""
+          country_profile_index=-1
+          country_profile_cycle=-1
+          case "$country_policy" in
+            source_default)
+              ;;
+            country_ab_us_lk_v1)
+              country_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
+              country_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
+              if [ $(( (country_profile_index + country_profile_cycle) % 2 )) -eq 0 ]; then
+                country_arm="country_us_treatment"
+                country_code="US"
+              else
+                country_arm="country_lk_control"
+                country_code="LK"
+              fi
+              ;;
+            country_us_v1)
+              country_arm="country_us_treatment"
+              country_code="US"
+              ;;
+            country_lk_v1)
+              country_arm="country_lk_control"
+              country_code="LK"
+              ;;
+            *)
+              echo "unsupported signup country policy: $country_policy" >&2
+              exit 2
+              ;;
+          esac
+          if [ -n "$country_code" ]; then
+            export OUTLOOK_SIGNUP_COUNTRY_CODE="$country_code"
+          else
+            unset OUTLOOK_SIGNUP_COUNTRY_CODE
+          fi
+          COUNTRY_POLICY="$country_policy" \
+          COUNTRY_ARM="$country_arm" \
+          COUNTRY_CODE="$country_code" \
+          COUNTRY_PROFILE_INDEX="$country_profile_index" \
+          COUNTRY_PROFILE_CYCLE="$country_profile_cycle" \
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          row = {
+              "policy": os.environ["COUNTRY_POLICY"],
+              "arm": os.environ["COUNTRY_ARM"],
+              "country_code": os.environ.get("COUNTRY_CODE") or None,
+              "ads_profile_index_block": int(os.environ["COUNTRY_PROFILE_INDEX"]),
+              "ads_profile_cycle_block": int(os.environ["COUNTRY_PROFILE_CYCLE"]),
+              "applied_to_probe": True,
+          }
+          Path("Results/diagnostics/signup_country_policy.json").write_text(
+              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(row, ensure_ascii=False))
+          PY
           private_console="Results/diagnostics/public_runner_private_console.log"
           echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
           echo "NETWORK_MODE=${{ inputs.network_mode }}"
           echo "pre_first_hold_warmup_policy=$warmup_policy arm=$warmup_arm"
           echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
+          echo "signup_country_policy=$country_policy arm=$country_arm code=${OUTLOOK_SIGNUP_COUNTRY_CODE:-source-default}"
           echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
           variant="${{ inputs.variant }}"
           echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
@@ -1437,6 +1513,7 @@ jobs:
           FRESH_SESSION_RESTART_POLICY_INPUT: ${{ inputs.fresh_session_restart_policy }}
           PRE_FIRST_HOLD_WARMUP_POLICY_INPUT: ${{ inputs.pre_first_hold_warmup_policy }}
           PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
+          SIGNUP_COUNTRY_POLICY_INPUT: ${{ inputs.signup_country_policy }}
           COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
           MAX_PARALLEL: ${{ inputs.max_parallel }}
           RUNTIME_MODE: ${{ inputs.runtime_mode }}
@@ -1469,6 +1546,7 @@ jobs:
           ads_fetch = load_json("Results/diagnostics/ads_online_fetch.json")
           session_restart = load_json("Results/diagnostics/fresh_session_restart.json")
           warmup = load_json("Results/diagnostics/pre_first_hold_warmup.json")
+          signup_country = load_json("Results/diagnostics/signup_country_policy.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
           fresh_absolute_timed_out = Path(
@@ -1586,6 +1664,45 @@ jobs:
                       pre_first_hold_warmup_ms = int(value) if value else None
                   except ValueError:
                       pre_first_hold_warmup_ms = None
+
+          signup_country_policy = os.environ.get("SIGNUP_COUNTRY_POLICY_INPUT", "")
+          if signup_country_policy not in {
+              "source_default", "country_ab_us_lk_v1",
+              "country_us_v1", "country_lk_v1",
+          }:
+              signup_country_policy = None
+          signup_country_arm = str(signup_country.get("arm") or "") or None
+          if signup_country_arm not in {
+              None, "source_default", "country_us_treatment", "country_lk_control",
+          }:
+              signup_country_arm = None
+          signup_country_code = str(signup_country.get("country_code") or "") or None
+          if signup_country_code not in {None, "US", "LK"}:
+              signup_country_code = None
+          signup_country_applied = signup_country.get("applied_to_probe") is True
+          if signup_country_arm is None:
+              try:
+                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
+              except ValueError:
+                  matrix_slot = 0
+              if signup_country_policy == "country_ab_us_lk_v1" and matrix_slot > 0:
+                  profile_index = (matrix_slot - 1) % 35
+                  profile_cycle = (matrix_slot - 1) // 35
+                  if (profile_index + profile_cycle) % 2 == 0:
+                      signup_country_arm = "country_us_treatment"
+                      signup_country_code = "US"
+                  else:
+                      signup_country_arm = "country_lk_control"
+                      signup_country_code = "LK"
+              elif signup_country_policy == "country_us_v1":
+                  signup_country_arm = "country_us_treatment"
+                  signup_country_code = "US"
+              elif signup_country_policy == "country_lk_v1":
+                  signup_country_arm = "country_lk_control"
+                  signup_country_code = "LK"
+              elif signup_country_policy == "source_default":
+                  signup_country_arm = "source_default"
+                  signup_country_code = None
 
           # Publish only aggregate-safe coordinator timings so queue regressions
           # can be diagnosed from redacted verdicts without decrypting evidence.
@@ -1726,6 +1843,10 @@ jobs:
               "pre_first_hold_warmup_arm": pre_first_hold_warmup_arm,
               "pre_first_hold_warmup_ms": pre_first_hold_warmup_ms,
               "pre_first_hold_warmup_applied": pre_first_hold_warmup_applied,
+              "signup_country_policy": signup_country_policy,
+              "signup_country_arm": signup_country_arm,
+              "signup_country_code": signup_country_code,
+              "signup_country_applied": signup_country_applied,
               "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
               "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
               "runtime_mode": os.environ.get("RUNTIME_MODE", ""),
