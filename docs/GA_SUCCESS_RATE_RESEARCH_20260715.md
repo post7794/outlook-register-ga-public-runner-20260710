@@ -162,7 +162,7 @@ registration path:
 
 ```text
 variant=online_ads_ga_fresh_5s_recovery
-private source=23475676b804858ca6a42bf9f420d0629b49003d
+private source=92cc7995dd383ab0375c9a380e792c7d50f38c22
 initial HumanCaptcha=unchanged natural online-ADS path
 fresh HumanCaptcha=early-armed, dormant 15s logical / 6.5s wall handler
 browser/config/final normalizer=unchanged online-ADS production values
@@ -187,7 +187,16 @@ Implementation smoke evidence:
   `invocation=2 handler=time_warp_hold`, but late hook installation emitted no
   decisive PX561 final. The run was cancelled after this mechanism reproduced,
   rather than spending the remaining slots on a known-broken variant;
-- source `2347567` now installs the time-warp hook at frame creation while it
-  remains dormant, disables automatic KNP prestart for the initial natural
-  challenge, and bounds a no-final fresh attempt to 45 seconds. The explicit
-  fresh invocation still performs KNP prestart immediately before mouse-down.
+- source `2347567` switched the hook mode to early and bounded a no-final
+  attempt to 45 seconds, but `--defer-route-hook-until-proof` still meant the
+  route injector was absent when the fresh iframe bootstrapped. Run
+  `29379164017` produced 7 strict/Graph-healthy accounts from 12 live probes;
+  its one fresh case ran both bounded fresh invocations but again emitted no
+  decisive PX561 final;
+- source `92cc799` adds a controller-to-probe preparation callback. It attaches
+  the hsprotect route injector after Microsoft requests the fresh challenge but
+  before the new shell/iframe is created. Thus the initial challenge remains
+  natural and untouched, while the fresh iframe receives the dormant runtime
+  hook from its first document/script byte. Automatic KNP prestart remains
+  disabled on the initial challenge; the explicit fresh invocation prestarts
+  KNP immediately before mouse-down.
