@@ -27,6 +27,7 @@ def verdict(attempt, category, *, marker="target-b001", **overrides):
         "coordinator_final_wait_ms": [],
         "coordinator_final_gap_ms": [],
         "variant": "online_ads_ga_production_fast_fail",
+        "ads_profile_policy": "round_robin",
         "coordinator_mode": "final_only",
         "max_parallel": 20,
         "runtime_mode": "prebuilt",

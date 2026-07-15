@@ -11,6 +11,15 @@ on:
         description: "Optional public-safe batch correlation label used by the target Graph-healthy orchestrator"
         required: false
         default: ""
+      ads_profile_policy:
+        description: "Online ADS fingerprint selection: production round-robin, randomized top-index A/B, or all top-index treatment"
+        required: true
+        default: "round_robin"
+        type: choice
+        options:
+          - round_robin
+          - historical_top_ab_v1
+          - historical_top_v1
       network_mode:
         description: "Use the fresh GA runner egress directly or route through the configured proxy pool"
         required: true
@@ -611,6 +620,62 @@ jobs:
           sed -i 's/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=0/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1/' run_xvfb_natural_1920.sh
           grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
+      - name: Select online ADS fingerprint arm
+        id: ads_profile_select
+        if: ${{ (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_production_fast_fail' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' || inputs.variant == 'online_ads_ga_5s_hold_transplant') && steps.egress.outputs.should_probe != 'false' }}
+        shell: bash
+        env:
+          ADS_PROFILE_POLICY: ${{ inputs.ads_profile_policy }}
+          GA_MATRIX_SLOT: ${{ matrix.attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p Results/diagnostics
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          policy = os.environ["ADS_PROFILE_POLICY"]
+          matrix_slot = int(os.environ["GA_MATRIX_SLOT"])
+          top_source_slots = (1, 3, 6, 13)  # selected indices 0, 2, 5, 12
+          non_top_source_slots = tuple(
+              slot for slot in range(1, 36) if slot not in top_source_slots
+          )
+          if policy == "historical_top_ab_v1":
+              if matrix_slot % 2:
+                  arm = "top_v1"
+                  rank = (matrix_slot - 1) // 2
+                  source_slot = top_source_slots[rank % len(top_source_slots)]
+              else:
+                  arm = "non_top_control"
+                  rank = matrix_slot // 2 - 1
+                  source_slot = non_top_source_slots[rank % len(non_top_source_slots)]
+          elif policy == "historical_top_v1":
+              arm = "top_v1"
+              source_slot = top_source_slots[(matrix_slot - 1) % len(top_source_slots)]
+          elif policy == "round_robin":
+              arm = "round_robin"
+              source_slot = matrix_slot
+          else:
+              raise SystemExit(f"unsupported ADS profile policy: {policy}")
+
+          selection = {
+              "policy": policy,
+              "arm": arm,
+              "matrix_slot": matrix_slot,
+              "source_slot": source_slot,
+              "expected_selected_index": source_slot - 1,
+              "top_selected_indices": [0, 2, 5, 12],
+          }
+          Path("Results/diagnostics/ads_profile_selection.json").write_text(
+              json.dumps(selection, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              for key in ("policy", "arm", "matrix_slot", "source_slot", "expected_selected_index"):
+                  handle.write(f"{key}={selection[key]}\n")
+          print(json.dumps(selection, ensure_ascii=False))
+          PY
+
       - name: Fetch and apply online ADS fingerprint
         if: ${{ (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_production_fast_fail' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' || inputs.variant == 'online_ads_ga_5s_hold_transplant') && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
@@ -619,8 +684,42 @@ jobs:
           mkdir -p .ads-online/generated Results/diagnostics
           python3 tools/fetch_ads_profile_template.py \
             --api-base "$ADS_PROFILE_API_URL" \
-            --slot "${{ matrix.attempt }}" \
+            --slot "${{ steps.ads_profile_select.outputs.source_slot }}" \
             --out .ads-online/profile.json | tee Results/diagnostics/ads_online_fetch.json
+          ADS_PROFILE_POLICY="${{ steps.ads_profile_select.outputs.policy }}" \
+          ADS_PROFILE_ARM="${{ steps.ads_profile_select.outputs.arm }}" \
+          GA_MATRIX_SLOT="${{ steps.ads_profile_select.outputs.matrix_slot }}" \
+          ADS_PROFILE_SOURCE_SLOT="${{ steps.ads_profile_select.outputs.source_slot }}" \
+          ADS_EXPECTED_SELECTED_INDEX="${{ steps.ads_profile_select.outputs.expected_selected_index }}" \
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("Results/diagnostics/ads_online_fetch.json")
+          row = json.loads(path.read_text(encoding="utf-8"))
+          policy = os.environ["ADS_PROFILE_POLICY"]
+          row.update({
+              "selection_policy": policy,
+              "selection_arm": os.environ["ADS_PROFILE_ARM"],
+              "matrix_slot": int(os.environ["GA_MATRIX_SLOT"]),
+              "profile_source_slot": int(os.environ["ADS_PROFILE_SOURCE_SLOT"]),
+              "expected_selected_index": int(os.environ["ADS_EXPECTED_SELECTED_INDEX"]),
+          })
+          if policy != "round_robin":
+              assert int(row.get("eligible_profile_count") or 0) == 35, row
+              assert int(row.get("selected_index")) == row["expected_selected_index"], row
+          path.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps({
+              "selection_policy": row["selection_policy"],
+              "selection_arm": row["selection_arm"],
+              "matrix_slot": row["matrix_slot"],
+              "profile_source_slot": row["profile_source_slot"],
+              "selected_index": row.get("selected_index"),
+              "eligible_profile_count": row.get("eligible_profile_count"),
+              "template_sha256": row.get("template_sha256"),
+          }, ensure_ascii=False))
+          PY
           python3 ads_like_cloak_profile_generator.py \
             --source-json .ads-online/profile.json \
             --base-config config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json \
@@ -1148,6 +1247,7 @@ jobs:
           NETWORK_MODE: ${{ inputs.network_mode }}
           RUNNER_LABEL: ${{ inputs.runner }}
           ORCHESTRATION_ID: ${{ inputs.orchestration_id }}
+          ADS_PROFILE_POLICY_INPUT: ${{ inputs.ads_profile_policy }}
           COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
           MAX_PARALLEL: ${{ inputs.max_parallel }}
           RUNTIME_MODE: ${{ inputs.runtime_mode }}
@@ -1177,6 +1277,7 @@ jobs:
 
           row = load_json("/tmp/private_classification.json")
           ingest = load_json("Results/diagnostics/outlook_email_ingest.json")
+          ads_fetch = load_json("Results/diagnostics/ads_online_fetch.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
           fresh_absolute_timed_out = Path(
@@ -1188,6 +1289,35 @@ jobs:
           fresh_policy_skipped = Path(
               "Results/diagnostics/fresh_rechallenge_policy_skip.txt"
           ).exists()
+
+          ads_profile_policy = os.environ.get("ADS_PROFILE_POLICY_INPUT", "")
+          if ads_profile_policy not in {
+              "round_robin", "historical_top_ab_v1", "historical_top_v1"
+          }:
+              ads_profile_policy = None
+          ads_profile_arm = str(ads_fetch.get("selection_arm") or "") or None
+          if ads_profile_arm not in {None, "round_robin", "top_v1", "non_top_control"}:
+              ads_profile_arm = None
+          if ads_profile_arm is None:
+              try:
+                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
+              except ValueError:
+                  matrix_slot = 0
+              if ads_profile_policy == "historical_top_ab_v1" and matrix_slot > 0:
+                  ads_profile_arm = "top_v1" if matrix_slot % 2 else "non_top_control"
+              elif ads_profile_policy == "historical_top_v1":
+                  ads_profile_arm = "top_v1"
+              elif ads_profile_policy == "round_robin":
+                  ads_profile_arm = "round_robin"
+          try:
+              ads_profile_selected_index = int(ads_fetch["selected_index"])
+              ads_profile_source_slot = int(ads_fetch["profile_source_slot"])
+          except (KeyError, TypeError, ValueError):
+              ads_profile_selected_index = None
+              ads_profile_source_slot = None
+          ads_template_sha256 = str(ads_fetch.get("template_sha256") or "")
+          if not re.fullmatch(r"[0-9a-f]{64}", ads_template_sha256):
+              ads_template_sha256 = None
 
           # Publish only aggregate-safe coordinator timings so queue regressions
           # can be diagnosed from redacted verdicts without decrypting evidence.
@@ -1310,6 +1440,11 @@ jobs:
               "network_mode": os.environ.get("NETWORK_MODE", ""),
               "runner": os.environ.get("RUNNER_LABEL", ""),
               "orchestration_id": os.environ.get("ORCHESTRATION_ID", ""),
+              "ads_profile_policy": ads_profile_policy,
+              "ads_profile_arm": ads_profile_arm,
+              "ads_profile_selected_index": ads_profile_selected_index,
+              "ads_profile_source_slot": ads_profile_source_slot,
+              "ads_template_sha256": ads_template_sha256,
               "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
               "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
               "runtime_mode": os.environ.get("RUNTIME_MODE", ""),
