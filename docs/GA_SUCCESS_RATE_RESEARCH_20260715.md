@@ -162,9 +162,9 @@ registration path:
 
 ```text
 variant=online_ads_ga_fresh_5s_recovery
-private source=7c5df7beb44e9e0c1bb070a7ebabb41abce234c6
+private source=23475676b804858ca6a42bf9f420d0629b49003d
 initial HumanCaptcha=unchanged natural online-ADS path
-fresh HumanCaptcha=late-installed 15s logical / 6.5s wall handler
+fresh HumanCaptcha=early-armed, dormant 15s logical / 6.5s wall handler
 browser/config/final normalizer=unchanged online-ADS production values
 ```
 
@@ -174,3 +174,20 @@ the natural implementation; only a Microsoft re-issued HumanCaptcha uses the
 successes while testing whether the historical primitive can convert the
 fresh-round `result|-1` cluster into `result|0` without importing the old
 CloakBrowser 0.3.32 identity bundle.
+
+Implementation smoke evidence:
+
+- run `29378259289` did not touch signup on its ten live slots because the
+  first wrapper revision passed one option unavailable in the pinned source;
+  the argument was removed and a static wrapper/parser flag validator was added
+  to the public workflow;
+- run `29378482221` then produced `2/2` strict, Graph-healthy live probes and
+  confirmed `invocation=1 handler=natural` with no time-warp activation;
+- the first actual fresh sample in run `29378685127` reached
+  `invocation=2 handler=time_warp_hold`, but late hook installation emitted no
+  decisive PX561 final. The run was cancelled after this mechanism reproduced,
+  rather than spending the remaining slots on a known-broken variant;
+- source `2347567` now installs the time-warp hook at frame creation while it
+  remains dormant, disables automatic KNP prestart for the initial natural
+  challenge, and bounds a no-final fresh attempt to 45 seconds. The explicit
+  fresh invocation still performs KNP prestart immediately before mouse-down.
