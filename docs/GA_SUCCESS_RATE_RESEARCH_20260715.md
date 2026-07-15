@@ -831,3 +831,28 @@ repaired by recycling the process; after one accepted proof attempt, the same
 GA egress commonly has no second registration opportunity. Future work should
 filter repeatedly bad egress before account work or obtain a fresh runner,
 rather than repeatedly retrying the same IP.
+
+## Egress refresh and blocked warmup A/B
+
+Decrypted live evidence from prospective runs `29422525353` and `29425165155`
+adds 78 admitted egress samples: 48 strict CreateAccount, 47 Graph healthy, 75
+first-session accepted proofs, and only three first-session pre-proof explicit
+risk blocks. Aggregation by both `/8` and `/16` found no new range satisfying
+the promotion rule (`n>=3`, at least two runs, zero strict, and every sample a
+pre-proof explicit risk block). The denylist is therefore unchanged; expanding
+it to a mixed range would discard observed successes rather than improve the
+causal funnel.
+
+The next isolated conversion hypothesis revisits first-proof age. Historical
+runs compared a 14-second warmup with the 22-second configuration across
+different egress batches, so their apparent difference is confounded by pool
+composition and time. The workflow now offers a same-run policy
+`warmup_ab_14s_22s_v1`, while production remains `fixed_input` with an empty
+override (the checked-in 22-second configuration).
+
+Assignment is blocked across the 35-profile ADS cycle rather than simple slot
+parity: each repeated profile switches arm on the next cycle, and slots 1-100
+produce exactly 50 assignments per arm. Public-safe verdicts expose policy,
+arm, effective warmup, and whether the probe actually ran. Promotion requires
+a prospective improvement in live-to-strict or accepted-to-strict conversion;
+fewer hold rounds or shorter duration alone is only an efficiency result.

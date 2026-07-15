@@ -334,6 +334,12 @@ def summarize_verdicts(
             "fresh_session_restart_policy": unique_values(
                 rows, "fresh_session_restart_policy"
             ),
+            "pre_first_hold_warmup_policy": unique_values(
+                rows, "pre_first_hold_warmup_policy"
+            ),
+            "pre_first_hold_warmup_ms": unique_values(
+                rows, "pre_first_hold_warmup_ms"
+            ),
             "coordinator_mode": unique_values(rows, "coordinator_mode"),
             "max_parallel": unique_values(rows, "max_parallel"),
             "runtime_mode": unique_values(rows, "runtime_mode"),

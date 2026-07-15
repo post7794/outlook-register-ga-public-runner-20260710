@@ -99,6 +99,16 @@ on:
         description: "Override captcha pre-first-hold warmup in ms; empty uses config default"
         required: false
         default: ""
+      pre_first_hold_warmup_policy:
+        description: "Captcha warmup policy: fixed input/default, blocked 14s-vs-22s A/B, or one explicit arm"
+        required: true
+        default: fixed_input
+        type: choice
+        options:
+          - fixed_input
+          - warmup_ab_14s_22s_v1
+          - warmup_14s_v1
+          - warmup_22s_v1
       slot_stagger_seconds:
         description: "Stagger only probe-bound slots after denylist: delay=((attempt-1)%max_parallel)*seconds. Use 10-15 for speed, 30 for max isolation, 0 for concurrent."
         required: true
@@ -999,16 +1009,84 @@ jobs:
         id: live
         shell: bash
         env:
-          OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS: ${{ inputs.pre_first_hold_warmup_ms }}
+          PRE_FIRST_HOLD_WARMUP_POLICY: ${{ inputs.pre_first_hold_warmup_policy }}
+          PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'online_ads_ga_production_fast_fail' && '0' || '' }}
           FRESH_SESSION_RESTART_POLICY: ${{ inputs.fresh_session_restart_policy }}
         run: |
           set +e
           mkdir -p Results/diagnostics
+          warmup_policy="$PRE_FIRST_HOLD_WARMUP_POLICY"
+          warmup_arm="fixed_input"
+          warmup_ms="$PRE_FIRST_HOLD_WARMUP_INPUT_MS"
+          warmup_profile_index=-1
+          warmup_profile_cycle=-1
+          case "$warmup_policy" in
+            fixed_input)
+              ;;
+            warmup_ab_14s_22s_v1)
+              # The online ADS pool has 35 eligible templates. Alternate each
+              # template's arm on its next cycle so a 100-slot run is exactly
+              # 50/50 and both arms see every repeated profile.
+              warmup_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
+              warmup_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
+              if [ $(( (warmup_profile_index + warmup_profile_cycle) % 2 )) -eq 0 ]; then
+                warmup_arm="warmup_14s_treatment"
+                warmup_ms="14000"
+              else
+                warmup_arm="warmup_22s_control"
+                warmup_ms="22000"
+              fi
+              ;;
+            warmup_14s_v1)
+              warmup_arm="warmup_14s_treatment"
+              warmup_ms="14000"
+              ;;
+            warmup_22s_v1)
+              warmup_arm="warmup_22s_control"
+              warmup_ms="22000"
+              ;;
+            *)
+              echo "unsupported pre-first-hold warmup policy: $warmup_policy" >&2
+              exit 2
+              ;;
+          esac
+          if [ -n "$warmup_ms" ]; then
+            if ! [[ "$warmup_ms" =~ ^[0-9]+$ ]] || [ "$warmup_ms" -gt 45000 ]; then
+              echo "pre-first-hold warmup must be blank or 0..45000ms" >&2
+              exit 2
+            fi
+          fi
+          export OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS="$warmup_ms"
+          WARMUP_POLICY="$warmup_policy" \
+          WARMUP_ARM="$warmup_arm" \
+          WARMUP_MS="$warmup_ms" \
+          WARMUP_PROFILE_INDEX="$warmup_profile_index" \
+          WARMUP_PROFILE_CYCLE="$warmup_profile_cycle" \
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          value = os.environ.get("WARMUP_MS", "")
+          row = {
+              "policy": os.environ["WARMUP_POLICY"],
+              "arm": os.environ["WARMUP_ARM"],
+              "effective_ms": int(value) if value else None,
+              "ads_profile_index_block": int(os.environ["WARMUP_PROFILE_INDEX"]),
+              "ads_profile_cycle_block": int(os.environ["WARMUP_PROFILE_CYCLE"]),
+              "applied_to_probe": True,
+          }
+          Path("Results/diagnostics/pre_first_hold_warmup.json").write_text(
+              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(row, ensure_ascii=False))
+          PY
           private_console="Results/diagnostics/public_runner_private_console.log"
           echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
           echo "NETWORK_MODE=${{ inputs.network_mode }}"
+          echo "pre_first_hold_warmup_policy=$warmup_policy arm=$warmup_arm"
           echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
           echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
           variant="${{ inputs.variant }}"
@@ -1357,6 +1435,8 @@ jobs:
           ORCHESTRATION_ID: ${{ inputs.orchestration_id }}
           ADS_PROFILE_POLICY_INPUT: ${{ inputs.ads_profile_policy }}
           FRESH_SESSION_RESTART_POLICY_INPUT: ${{ inputs.fresh_session_restart_policy }}
+          PRE_FIRST_HOLD_WARMUP_POLICY_INPUT: ${{ inputs.pre_first_hold_warmup_policy }}
+          PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
           COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
           MAX_PARALLEL: ${{ inputs.max_parallel }}
           RUNTIME_MODE: ${{ inputs.runtime_mode }}
@@ -1388,6 +1468,7 @@ jobs:
           ingest = load_json("Results/diagnostics/outlook_email_ingest.json")
           ads_fetch = load_json("Results/diagnostics/ads_online_fetch.json")
           session_restart = load_json("Results/diagnostics/fresh_session_restart.json")
+          warmup = load_json("Results/diagnostics/pre_first_hold_warmup.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
           fresh_absolute_timed_out = Path(
@@ -1455,6 +1536,56 @@ jobs:
           fresh_session_recovered_strict = session_restart.get("recovered_strict") is True
           fresh_session_second_fresh = session_restart.get("second_fresh_policy_skip") is True
           fresh_session_second_riskblock = session_restart.get("second_riskblock_marker") is True
+
+          pre_first_hold_warmup_policy = os.environ.get(
+              "PRE_FIRST_HOLD_WARMUP_POLICY_INPUT", ""
+          )
+          if pre_first_hold_warmup_policy not in {
+              "fixed_input", "warmup_ab_14s_22s_v1",
+              "warmup_14s_v1", "warmup_22s_v1",
+          }:
+              pre_first_hold_warmup_policy = None
+          pre_first_hold_warmup_arm = str(warmup.get("arm") or "") or None
+          if pre_first_hold_warmup_arm not in {
+              None, "fixed_input", "warmup_14s_treatment", "warmup_22s_control",
+          }:
+              pre_first_hold_warmup_arm = None
+          try:
+              pre_first_hold_warmup_ms = int(warmup["effective_ms"])
+          except (KeyError, TypeError, ValueError):
+              pre_first_hold_warmup_ms = None
+          if pre_first_hold_warmup_ms is not None and not (
+              0 <= pre_first_hold_warmup_ms <= 45000
+          ):
+              pre_first_hold_warmup_ms = None
+          pre_first_hold_warmup_applied = warmup.get("applied_to_probe") is True
+          if pre_first_hold_warmup_arm is None:
+              try:
+                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
+              except ValueError:
+                  matrix_slot = 0
+              if pre_first_hold_warmup_policy == "warmup_ab_14s_22s_v1" and matrix_slot > 0:
+                  profile_index = (matrix_slot - 1) % 35
+                  profile_cycle = (matrix_slot - 1) // 35
+                  if (profile_index + profile_cycle) % 2 == 0:
+                      pre_first_hold_warmup_arm = "warmup_14s_treatment"
+                      pre_first_hold_warmup_ms = 14000
+                  else:
+                      pre_first_hold_warmup_arm = "warmup_22s_control"
+                      pre_first_hold_warmup_ms = 22000
+              elif pre_first_hold_warmup_policy == "warmup_14s_v1":
+                  pre_first_hold_warmup_arm = "warmup_14s_treatment"
+                  pre_first_hold_warmup_ms = 14000
+              elif pre_first_hold_warmup_policy == "warmup_22s_v1":
+                  pre_first_hold_warmup_arm = "warmup_22s_control"
+                  pre_first_hold_warmup_ms = 22000
+              elif pre_first_hold_warmup_policy == "fixed_input":
+                  pre_first_hold_warmup_arm = "fixed_input"
+                  try:
+                      value = os.environ.get("PRE_FIRST_HOLD_WARMUP_INPUT_MS", "")
+                      pre_first_hold_warmup_ms = int(value) if value else None
+                  except ValueError:
+                      pre_first_hold_warmup_ms = None
 
           # Publish only aggregate-safe coordinator timings so queue regressions
           # can be diagnosed from redacted verdicts without decrypting evidence.
@@ -1591,6 +1722,10 @@ jobs:
               "fresh_session_recovered_strict": fresh_session_recovered_strict,
               "fresh_session_second_fresh": fresh_session_second_fresh,
               "fresh_session_second_riskblock": fresh_session_second_riskblock,
+              "pre_first_hold_warmup_policy": pre_first_hold_warmup_policy,
+              "pre_first_hold_warmup_arm": pre_first_hold_warmup_arm,
+              "pre_first_hold_warmup_ms": pre_first_hold_warmup_ms,
+              "pre_first_hold_warmup_applied": pre_first_hold_warmup_applied,
               "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
               "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
               "runtime_mode": os.environ.get("RUNTIME_MODE", ""),

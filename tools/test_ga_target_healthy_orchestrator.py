@@ -29,6 +29,8 @@ def verdict(attempt, category, *, marker="target-b001", **overrides):
         "variant": "online_ads_ga_production_fast_fail",
         "ads_profile_policy": "round_robin",
         "fresh_session_restart_policy": "off",
+        "pre_first_hold_warmup_policy": "fixed_input",
+        "pre_first_hold_warmup_ms": None,
         "coordinator_mode": "final_only",
         "max_parallel": 20,
         "runtime_mode": "prebuilt",
@@ -145,6 +147,13 @@ class VerdictSummaryTests(unittest.TestCase):
         self.assertEqual(summary["coordinator_final_reservations"], 3)
         self.assertEqual(summary["coordinator_final_wait_ms_total"], 6000)
         self.assertEqual(summary["coordinator_final_gap_ms"], [12000])
+        self.assertEqual(
+            summary["observed_config"]["pre_first_hold_warmup_policy"],
+            ["fixed_input"],
+        )
+        self.assertEqual(
+            summary["observed_config"]["pre_first_hold_warmup_ms"], [None]
+        )
         self.assertAlmostEqual(summary["graph_healthy_per_min"], 0.1)
 
     def test_rejects_wrong_orchestration_marker(self):
