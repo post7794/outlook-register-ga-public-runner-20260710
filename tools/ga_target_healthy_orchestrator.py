@@ -342,6 +342,8 @@ def summarize_verdicts(
             ),
             "signup_country_policy": unique_values(rows, "signup_country_policy"),
             "signup_country_code": unique_values(rows, "signup_country_code"),
+            "signup_dob_policy": unique_values(rows, "signup_dob_policy"),
+            "signup_dob_mode": unique_values(rows, "signup_dob_mode"),
             "coordinator_mode": unique_values(rows, "coordinator_mode"),
             "max_parallel": unique_values(rows, "max_parallel"),
             "runtime_mode": unique_values(rows, "runtime_mode"),

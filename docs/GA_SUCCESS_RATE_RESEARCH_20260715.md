@@ -916,3 +916,21 @@ US moved both conversion endpoints in the wrong direction (`-10.5pp` live and
 `12/50` per arm. The country-consistency hypothesis is rejected. Production
 remains `signup_country_policy=source_default`; an intuitive environment
 mismatch is not sufficient evidence to rewrite account identity fields.
+
+## Next conversion hypothesis: non-constant birth month/day
+
+A safe feature audit joined 44 strict and 27 fresh-policy outcomes from runs
+`29422525353` and `29429069331`. Username length/digit count, first/last-name
+length, generated age, first-request-to-risk-verify time, and
+risk-initialize-to-verify time all had within-run permutation `p>0.37`. One
+exploratory vowel-count value reached `p=0.078`, but it has no prior mechanism
+and is not actionable after multiple feature checks.
+
+Birth month/day is different: all 79 decrypted live signup signatures sent
+January 1. This is not an outcome-correlated discovery because there is no
+natural control variation. It comes directly from the source default: year is
+randomized, while month and day both default to `1`. The workflow now offers a
+blocked `dob_ab_random_default_v1` policy that randomizes month/day within valid
+ranges while retaining the same year range. Control preserves the exact Jan-1
+source behavior. Production remains `signup_dob_policy=source_default`, and the
+workflow rejects any dispatch that combines DOB, country, or warmup experiments.

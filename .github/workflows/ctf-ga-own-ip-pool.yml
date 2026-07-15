@@ -119,6 +119,16 @@ on:
           - country_ab_us_lk_v1
           - country_us_v1
           - country_lk_v1
+      signup_dob_policy:
+        description: "Signup DOB month/day: source default Jan-1, blocked random-vs-default A/B, or one explicit arm"
+        required: true
+        default: source_default
+        type: choice
+        options:
+          - source_default
+          - dob_ab_random_default_v1
+          - dob_random_v1
+          - dob_default_v1
       slot_stagger_seconds:
         description: "Stagger only probe-bound slots after denylist: delay=((attempt-1)%max_parallel)*seconds. Use 10-15 for speed, 30 for max isolation, 0 for concurrent."
         required: true
@@ -1022,6 +1032,7 @@ jobs:
           PRE_FIRST_HOLD_WARMUP_POLICY: ${{ inputs.pre_first_hold_warmup_policy }}
           PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
           SIGNUP_COUNTRY_POLICY: ${{ inputs.signup_country_policy }}
+          SIGNUP_DOB_POLICY: ${{ inputs.signup_dob_policy }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'online_ads_ga_production_fast_fail' && '0' || '' }}
           FRESH_SESSION_RESTART_POLICY: ${{ inputs.fresh_session_restart_policy }}
@@ -1069,8 +1080,12 @@ jobs:
               exit 2
             fi
           fi
-          if [ "$warmup_policy" != "fixed_input" ] && [ "$SIGNUP_COUNTRY_POLICY" != "source_default" ]; then
-            echo "warmup and signup-country experiments cannot be enabled together" >&2
+          experiment_count=0
+          [ "$warmup_policy" != "fixed_input" ] && experiment_count=$((experiment_count + 1))
+          [ "$SIGNUP_COUNTRY_POLICY" != "source_default" ] && experiment_count=$((experiment_count + 1))
+          [ "$SIGNUP_DOB_POLICY" != "source_default" ] && experiment_count=$((experiment_count + 1))
+          if [ "$experiment_count" -gt 1 ]; then
+            echo "only one success-rate experiment may be enabled per run" >&2
             exit 2
           fi
           export OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS="$warmup_ms"
@@ -1158,12 +1173,82 @@ jobs:
           )
           print(json.dumps(row, ensure_ascii=False))
           PY
+          dob_policy="$SIGNUP_DOB_POLICY"
+          dob_arm="source_default"
+          dob_mode=""
+          dob_profile_index=-1
+          dob_profile_cycle=-1
+          case "$dob_policy" in
+            source_default)
+              ;;
+            dob_ab_random_default_v1)
+              dob_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
+              dob_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
+              if [ $(( (dob_profile_index + dob_profile_cycle) % 2 )) -eq 0 ]; then
+                dob_arm="dob_random_treatment"
+                dob_mode="random"
+              else
+                dob_arm="dob_jan1_control"
+                dob_mode="source_default"
+              fi
+              ;;
+            dob_random_v1)
+              dob_arm="dob_random_treatment"
+              dob_mode="random"
+              ;;
+            dob_default_v1)
+              dob_arm="dob_jan1_control"
+              dob_mode="source_default"
+              ;;
+            *)
+              echo "unsupported signup DOB policy: $dob_policy" >&2
+              exit 2
+              ;;
+          esac
+          if [ "$dob_mode" = "random" ]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          profile = data.setdefault("signup_fill_profile", {})
+          if not isinstance(profile, dict):
+              raise SystemExit("signup_fill_profile must be an object")
+          profile["birth_mode"] = "random"
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+          PY
+          fi
+          DOB_POLICY="$dob_policy" \
+          DOB_ARM="$dob_arm" \
+          DOB_MODE="$dob_mode" \
+          DOB_PROFILE_INDEX="$dob_profile_index" \
+          DOB_PROFILE_CYCLE="$dob_profile_cycle" \
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          row = {
+              "policy": os.environ["DOB_POLICY"],
+              "arm": os.environ["DOB_ARM"],
+              "mode": os.environ.get("DOB_MODE") or None,
+              "ads_profile_index_block": int(os.environ["DOB_PROFILE_INDEX"]),
+              "ads_profile_cycle_block": int(os.environ["DOB_PROFILE_CYCLE"]),
+              "applied_to_probe": True,
+          }
+          Path("Results/diagnostics/signup_dob_policy.json").write_text(
+              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(row, ensure_ascii=False))
+          PY
           private_console="Results/diagnostics/public_runner_private_console.log"
           echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
           echo "NETWORK_MODE=${{ inputs.network_mode }}"
           echo "pre_first_hold_warmup_policy=$warmup_policy arm=$warmup_arm"
           echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
           echo "signup_country_policy=$country_policy arm=$country_arm code=${OUTLOOK_SIGNUP_COUNTRY_CODE:-source-default}"
+          echo "signup_dob_policy=$dob_policy arm=$dob_arm mode=${dob_mode:-source-default}"
           echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
           variant="${{ inputs.variant }}"
           echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
@@ -1514,6 +1599,7 @@ jobs:
           PRE_FIRST_HOLD_WARMUP_POLICY_INPUT: ${{ inputs.pre_first_hold_warmup_policy }}
           PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
           SIGNUP_COUNTRY_POLICY_INPUT: ${{ inputs.signup_country_policy }}
+          SIGNUP_DOB_POLICY_INPUT: ${{ inputs.signup_dob_policy }}
           COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
           MAX_PARALLEL: ${{ inputs.max_parallel }}
           RUNTIME_MODE: ${{ inputs.runtime_mode }}
@@ -1547,6 +1633,7 @@ jobs:
           session_restart = load_json("Results/diagnostics/fresh_session_restart.json")
           warmup = load_json("Results/diagnostics/pre_first_hold_warmup.json")
           signup_country = load_json("Results/diagnostics/signup_country_policy.json")
+          signup_dob = load_json("Results/diagnostics/signup_dob_policy.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
           fresh_absolute_timed_out = Path(
@@ -1704,6 +1791,45 @@ jobs:
                   signup_country_arm = "source_default"
                   signup_country_code = None
 
+          signup_dob_policy = os.environ.get("SIGNUP_DOB_POLICY_INPUT", "")
+          if signup_dob_policy not in {
+              "source_default", "dob_ab_random_default_v1",
+              "dob_random_v1", "dob_default_v1",
+          }:
+              signup_dob_policy = None
+          signup_dob_arm = str(signup_dob.get("arm") or "") or None
+          if signup_dob_arm not in {
+              None, "source_default", "dob_random_treatment", "dob_jan1_control",
+          }:
+              signup_dob_arm = None
+          signup_dob_mode = str(signup_dob.get("mode") or "") or None
+          if signup_dob_mode not in {None, "random", "source_default"}:
+              signup_dob_mode = None
+          signup_dob_applied = signup_dob.get("applied_to_probe") is True
+          if signup_dob_arm is None:
+              try:
+                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
+              except ValueError:
+                  matrix_slot = 0
+              if signup_dob_policy == "dob_ab_random_default_v1" and matrix_slot > 0:
+                  profile_index = (matrix_slot - 1) % 35
+                  profile_cycle = (matrix_slot - 1) // 35
+                  if (profile_index + profile_cycle) % 2 == 0:
+                      signup_dob_arm = "dob_random_treatment"
+                      signup_dob_mode = "random"
+                  else:
+                      signup_dob_arm = "dob_jan1_control"
+                      signup_dob_mode = "source_default"
+              elif signup_dob_policy == "dob_random_v1":
+                  signup_dob_arm = "dob_random_treatment"
+                  signup_dob_mode = "random"
+              elif signup_dob_policy == "dob_default_v1":
+                  signup_dob_arm = "dob_jan1_control"
+                  signup_dob_mode = "source_default"
+              elif signup_dob_policy == "source_default":
+                  signup_dob_arm = "source_default"
+                  signup_dob_mode = None
+
           # Publish only aggregate-safe coordinator timings so queue regressions
           # can be diagnosed from redacted verdicts without decrypting evidence.
           # Restrict parsing to the canonical live-probe log because the same
@@ -1847,6 +1973,10 @@ jobs:
               "signup_country_arm": signup_country_arm,
               "signup_country_code": signup_country_code,
               "signup_country_applied": signup_country_applied,
+              "signup_dob_policy": signup_dob_policy,
+              "signup_dob_arm": signup_dob_arm,
+              "signup_dob_mode": signup_dob_mode,
+              "signup_dob_applied": signup_dob_applied,
               "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
               "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
               "runtime_mode": os.environ.get("RUNTIME_MODE", ""),
