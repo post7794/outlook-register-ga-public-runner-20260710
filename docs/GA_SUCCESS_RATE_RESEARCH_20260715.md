@@ -162,7 +162,7 @@ registration path:
 
 ```text
 variant=online_ads_ga_fresh_5s_recovery
-private source=92cc7995dd383ab0375c9a380e792c7d50f38c22
+private source=83a642e7f8f7f7a93a3e1a94754917b705239881
 initial HumanCaptcha=unchanged natural online-ADS path
 fresh HumanCaptcha=early-armed, dormant 15s logical / 6.5s wall handler
 browser/config/final normalizer=unchanged online-ADS production values
@@ -200,3 +200,22 @@ Implementation smoke evidence:
   hook from its first document/script byte. Automatic KNP prestart remains
   disabled on the initial challenge; the explicit fresh invocation prestarts
   KNP immediately before mouse-down.
+
+Run `29379820651` validates that boundary with two fresh cases:
+
+- both fresh iframes were route-injected before their document and captcha JS
+  initialized, and both emitted decisive PX561 finals instead of the previous
+  no-final timeout;
+- one case returned `result|-1` on both bounded rounds;
+- the other returned `result|-1` on fresh round 1, then `result|0` on fresh
+  round 2. Microsoft answered that accepted proof with another
+  `riskChallengeRequired` rather than `continue`;
+- the controller's two-round cap then ended the flow before it could solve the
+  newly issued third HumanCaptcha.
+
+This is the first GA evidence that the fresh-only transplant repairs the
+captcha boundary while preserving the natural initial path. Source `83a642e`
+raises only the fresh server-round budget from two to three. The follow-up must
+use the existing 300-second absolute ceiling; the accepted second fresh proof
+arrived with too little of the previous 180-second budget left for a third
+round.
