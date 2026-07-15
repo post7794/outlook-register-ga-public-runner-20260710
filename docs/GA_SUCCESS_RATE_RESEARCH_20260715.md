@@ -934,3 +934,28 @@ blocked `dob_ab_random_default_v1` policy that randomizes month/day within valid
 ranges while retaining the same year range. Control preserves the exact Jan-1
 source behavior. Production remains `signup_dob_policy=source_default`, and the
 workflow rejects any dispatch that combines DOB, country, or warmup experiments.
+
+Smoke run `29434098808` verified the request boundary: the admitted control sent
+January 1, while the admitted treatment sent a valid randomized month/day with
+the year still inside the original range. The treatment proof was accepted but
+CreateAccount returned error `1039`, so the main run tracked this separately
+from captcha and fresh outcomes.
+
+Prospective run `29434744138` dispatched 100 slots:
+
+| arm | slots | skip | live | accepted | strict / Graph healthy | result0-no-create | live -> strict |
+|-----|------:|-----:|-----:|---------:|-----------------------:|------------------:|---------------:|
+| random month/day | 50 | 32 | 18 | 16 | 4 / 4 | 7 | 22.2% |
+| Jan-1 control | 50 | 28 | 22 | 21 | 11 / 11 | 0 | 50.0% |
+
+Randomization reduced live strict conversion by `27.8pp` and raw Graph-healthy
+yield by `14pp`. More decisively, technical failure occurred in `7/18`
+treatment probes and `0/22` controls (two-sided Fisher `p=0.0017`). Targeted
+decryption confirmed all seven treatment failures had distinct non-Jan-1 valid
+month/day values, an accepted collector proof, and the same CreateAccount error
+`1039`.
+
+The randomized-DOB hypothesis is rejected. Production remains
+`signup_dob_policy=source_default`; January 1 may look synthetic, but changing
+it breaks this protocol/CreateAccount state boundary and materially lowers
+end-to-end account yield.
