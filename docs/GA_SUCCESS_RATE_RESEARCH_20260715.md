@@ -558,3 +558,93 @@ The policy therefore preserves the proven first HumanCaptcha path and removes
 only the repeatedly unproductive fresh salvage work. This is now the preferred
 production variant; `online_ads_ga_fresh_5s_recovery` remains a research-only
 control.
+
+## 100-slot production validation
+
+Run `29406813243` validated `online_ads_ga_production_fast_fail` at the normal
+100-slot scale with 20-way matrix parallelism, final-only coordination, the
+prebuilt runtime, and the expanded egress denylist:
+
+```text
+100 dispatched
+ 49 egress-denylist skips
+ 51 live probes
+   48 accepted initial result|0
+   33 strict CreateAccount
+   32 immediate Graph healthy
+   13 fresh HumanCaptcha -> production policy skip
+    2 pre-proof explicit riskBlock
+    1 accepted proof -> explicit riskBlock
+    1 accepted proof -> CreateAccount error.code=1350
+    1 probe timeout before an accepted proof
+```
+
+Rates:
+
+```text
+raw strict                         33/100 = 33.0%
+raw immediate Graph healthy        32/100 = 32.0%
+live accepted proof                 48/51 = 94.1%
+live strict                         33/51 = 64.7%
+accepted-checkpoint strict          33/48 = 68.8%
+immediate Graph after creation      32/33 = 97.0%
+strict / run minute                       = 1.937/min
+immediate Graph healthy / run minute      = 1.879/min
+```
+
+The run lasted 17.03 minutes. The previous 100-slot production run
+`29347583690` delivered 34 immediate Graph-healthy accounts in 19.38 minutes,
+or 1.754/min. Thus the new run's raw count is lower because the current GA pool
+contained more denylisted egresses (`49` versus `37`), while healthy throughput
+still increased by 7.1%. Skip ratio and registration quality must remain
+separate metrics.
+
+### Final coordinator scale boundary
+
+Decrypted evidence shows why the old 12-minute probe cap is too small for a
+100-slot batch:
+
+```text
+accepted on hold attempt 1: 37
+accepted on hold attempt 2: 11
+final coordinator reservations: 61
+median reservation wait: 160.8s
+p90 reservation wait:    218.6s
+maximum wait:             235.2s
+aggregate runner wait:    155.37 minutes
+```
+
+Second holds are not disposable: they recovered `11/12` slots that reached a
+second attempt and produced seven strict accounts. Slot 51 spent about 172
+seconds on each of two coordinator waits and hit the 12-minute probe timeout
+before its configured third hold. Production defaults are therefore raised to
+an 18-minute probe cap and a 30-minute job cap. They are timeout ceilings, not
+fixed sleeps, so normal slots do not become slower.
+
+### Delayed Graph provisioning is retryable
+
+Slot 41 strictly created an account but the immediate Graph Inbox probe failed.
+The upload row remained available. A delayed retry using that retained row
+succeeded and created a healthy formal account, proving this sample was mailbox
+provisioning lag rather than a permanent OAuth failure. The ingestion loop now
+retries only `graph_probe_failed` with bounded backoff, in addition to its
+existing transport/route retry set. Other OAuth, token, IMAP, input, and
+configuration errors remain fail-fast.
+
+The delayed retry raises this batch's eventually verified lifecycle result to
+`33/33` Graph healthy after strict creation. It is kept separate from the
+run-time throughput counter because the repair occurred after the workflow had
+finished.
+
+### Remaining losses
+
+- No CheckAvailable conflict or username-reroll event occurred in this run, so
+  the `1220` path remains code-tested but not live-exercised.
+- The single `error.code=1350` followed a genuine `risk/verify state=continue`
+  and used the exact returned continuation token. It is not the historical
+  forced-continue false positive, but one sample is insufficient to justify a
+  CreateAccount retry.
+- The dominant non-IP loss is now Microsoft issuing another HumanCaptcha:
+  `13/48` accepted initial proofs. Existing deep-fresh experiments still show
+  zero end-to-end CreateAccount recoveries, so fast-fail remains the production
+  policy.

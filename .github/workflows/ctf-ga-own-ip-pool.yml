@@ -52,11 +52,11 @@ on:
       timeout_minutes:
         description: "Per-job timeout minutes"
         required: true
-        default: "25"
+        default: "30"
       probe_timeout_minutes:
         description: "Live probe timeout inside each job; timed-out bad IPs still upload evidence"
         required: true
-        default: "12"
+        default: "18"
       fresh_absolute_timeout_seconds:
         description: "Hard deadline in seconds from the first accepted result|0 across all fresh-rechallenge attempts and rounds; 0 disables"
         required: true
@@ -1068,9 +1068,14 @@ jobs:
           fi
           success=false
           # The panel's hourly nginx reconciliation has produced a measured
-          # ~75s window where this exact route returns 404.  Cover that window
-          # without retrying permanent OAuth/Graph application failures.
+          # ~75s window where this exact route returns 404. Newly-created
+          # mailboxes can also need a short provisioning window before Graph
+          # Inbox is ready. Other OAuth/application failures remain final.
+          retry_delays=(0 30 60 120 180)
           for retry in 1 2 3 4 5; do
+            if [ "$retry" -gt 1 ]; then
+              sleep "${retry_delays[$((retry - 1))]}"
+            fi
             rm -f "$response_file"
             http_code=$(curl -sS --connect-timeout 10 --max-time 120 \
               -o "$response_file" -w '%{http_code}' \
@@ -1078,7 +1083,7 @@ jobs:
               -H 'Content-Type: application/json' \
               --data-binary @"$request_file" \
               "${OUTLOOK_EMAIL_BASE_URL%/}/api/external/outlook/import-authorize" || true)
-            if HTTP_CODE="$http_code" RETRY="$retry" RESPONSE_FILE="$response_file" python3 - <<'PY'
+            HTTP_CODE="$http_code" RETRY="$retry" RESPONSE_FILE="$response_file" python3 - <<'PY'
           import json, os
           from pathlib import Path
           try:
@@ -1106,17 +1111,26 @@ jobs:
           Path('Results/diagnostics/outlook_email_ingest.json').write_text(
               json.dumps(safe, ensure_ascii=False, indent=2), encoding='utf-8'
           )
-          raise SystemExit(0 if ok else 1)
+          if ok:
+              raise SystemExit(0)
+          # A newly-created mailbox can briefly issue OAuth tokens before its
+          # Graph Inbox resource is provisioned. Retry this one application
+          # failure only; auth, token and configuration failures remain final.
+          raise SystemExit(75 if error_code == 'graph_probe_failed' else 1)
           PY
-            then
+            parse_ec=$?
+            if [ "$parse_ec" -eq 0 ]; then
               success=true
               break
             fi
+            if [ "$parse_ec" -eq 75 ]; then
+              echo "outlookEmail Graph probe not ready; retry=$retry/5"
+              continue
+            fi
             case "$http_code" in
-              000|404|408|425|429|5??) ;;
+              000|404|408|425|429|5??) continue ;;
               *) break ;;
             esac
-            if [ "$retry" -lt 5 ]; then sleep 25; fi
           done
           echo "outlookEmail integration attempted success=$success"
           exit 0
@@ -1186,6 +1200,7 @@ jobs:
           # "strict_success" with a usable mailbox.
           graph_import_attempted = bool(ingest.get("attempted"))
           graph_import_ok = ingest.get("success") is True
+          graph_import_attempts = int(ingest.get("retry") or 0)
           graph_import_error = str(ingest.get("error_code") or "")
           allowed_ingest_errors = {
               "input_invalid", "oauth_failed", "token_validation_failed",
@@ -1271,6 +1286,7 @@ jobs:
               "account_lifecycle": account_lifecycle,
               "graph_import_attempted": graph_import_attempted,
               "graph_import_ok": graph_import_ok,
+              "graph_import_attempts": graph_import_attempts,
               "graph_import_error_code": graph_import_error,
               "explicit_riskblock": explicit_riskblock,
               "accepted_result0": accepted_result0,
