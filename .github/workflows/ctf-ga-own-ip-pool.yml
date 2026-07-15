@@ -142,7 +142,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' && 'b33b57e59f53667d9f7c4fd7875cc592927c8108' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '01086ae6d319a8bbf019ddb34267edd59ac7ec31' || (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' && 'b8cee97e0b9425603e2797052ba6b59bd75f394d' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '01086ae6d319a8bbf019ddb34267edd59ac7ec31' || (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -206,7 +206,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ inputs.variant }}" = "online_ads_ga_fresh_5s_recovery" ]; then
-            expected=b33b57e59f53667d9f7c4fd7875cc592927c8108
+            expected=b8cee97e0b9425603e2797052ba6b59bd75f394d
           elif [ "${{ inputs.variant }}" = "online_ads_ga_5s_hold_transplant" ]; then
             expected=01086ae6d319a8bbf019ddb34267edd59ac7ec31
           else
@@ -230,8 +230,9 @@ jobs:
             test -f run_xvfb_natural_fresh_5s_1920.sh
             grep -q -- '--mode natural_then_time_warp_hold' run_xvfb_natural_fresh_5s_1920.sh
             grep -q -- '--defer-route-hook-until-proof' run_xvfb_natural_fresh_5s_1920.sh
-            grep -q -- '--final-proof-normalizer ads_safe' run_xvfb_natural_fresh_5s_1920.sh
-            ! grep -q -- '--final-proof-normalizer minimal_natural_hold' run_xvfb_natural_fresh_5s_1920.sh
+            grep -q -- '--final-proof-normalizer minimal_natural_hold' run_xvfb_natural_fresh_5s_1920.sh
+            grep -q -- '--fresh-final-proof-normalizer ads_safe' run_xvfb_natural_fresh_5s_1920.sh
+            grep -q 'fresh final proof normalizer switched' protocol_runtime_probe.py
             grep -q -- '--time-warp-install-mode early' run_xvfb_natural_fresh_5s_1920.sh
             grep -q -- '--time-warp-wall-ms 6500' run_xvfb_natural_fresh_5s_1920.sh
             grep -q -- '--normalize-px1200-timing on' run_xvfb_natural_fresh_5s_1920.sh

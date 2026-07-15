@@ -329,10 +329,45 @@ that crossed two HumanCaptcha challenges and reached CreateAccount used
 so this scalar comparison is directional evidence rather than proof that XGhm
 alone is causal.
 
-Source `b33b57e59f53667d9f7c4fd7875cc592927c8108` changes only the fresh
-wrapper's primary normalizer to `ads_safe`. The hook remains deferred until
-Microsoft issues a fresh challenge, so the successful initial natural path is
-unchanged. Post-primary final retries remain disabled; the next run tests one
-real decisive final per fresh challenge. If that still fails, the next isolated
-variables are, in order, skipping mid-probe snapshots and then allowing a
-second real hold attempt. The deadline should not be increased again.
+The first implementation, source `b33b57e59f53667d9f7c4fd7875cc592927c8108`,
+set the wrapper's global `--final-proof-normalizer` to `ads_safe`. Run
+`29382465296` immediately disproved the assumption that the deferred JS route
+hook also deferred the Python collector normalizer:
+
+```text
+40 verdicts uploaded before/while cancellation
+ 23 egress-denylist skips
+ 17 live probes
+    0 accepted collector result|0
+    0 strict CreateAccount
+   10 collector result|-1
+    6 score0/no result0
+    1 pre-proof explicit riskBlock
+```
+
+The run was cancelled as soon as the regression was clear. A decrypted live
+sample shows `invocation=1 handler=natural` and
+`final_proof.mode=ads_safe`, followed by `result|-1`. The Python Y1NZ/final
+normalizer is installed when the page is created even when the fresh runtime
+JS injector is deferred. Therefore the global wrapper switch corrupted the
+known-good first proof; the failure is in phase isolation, not evidence against
+ADS-safe on a real fresh proof.
+
+Source `b8cee97e0b9425603e2797052ba6b59bd75f394d` adds an explicit mutable
+normalizer phase state:
+
+```text
+initial HumanCaptcha -> minimal_natural_hold
+risk/verify requests fresh HumanCaptcha
+-> switch Python collector normalizer to ads_safe
+-> create/inject fresh challenge shell
+```
+
+The wrapper now passes both `--final-proof-normalizer minimal_natural_hold` and
+`--fresh-final-proof-normalizer ads_safe`. The switch occurs in the existing
+controller callback before the fresh shell is created; tests verify the shared
+route state mutates in place. Post-primary final retries remain disabled, so
+each fresh challenge still sends one real decisive final. If the isolated
+ADS-safe fresh final remains rejected, the next variables are, in order,
+skipping mid-probe snapshots and then allowing a second real hold attempt. The
+deadline should not be increased again.
