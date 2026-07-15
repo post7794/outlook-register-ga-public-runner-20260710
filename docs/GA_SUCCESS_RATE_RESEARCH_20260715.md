@@ -1008,3 +1008,57 @@ cloakbrowser package metadata to 3.12. Cache keys now map 22.04 to `py310` and
 cache must be built and smoke-tested before the runner-pool success-rate
 hypothesis can be evaluated. No risk or captcha conclusion is drawn from the
 failed 24.04 run.
+
+## Valid runner-pool A/B and replication
+
+Cache build run `29439922239` created the isolated Python 3.12 runtime for
+Ubuntu 24.04. Smoke run `29440072683` then admitted six of ten slots and
+produced three strict / Graph-healthy accounts without a runtime failure. This
+closed the prerequisite above and allowed a valid runner comparison.
+
+The first valid concurrent round used runs `29440536049` (Ubuntu 22.04) and
+`29440546442` (Ubuntu 24.04), with 50 slots and `max_parallel=10` per arm. Both
+arms used the production source, round-robin ADS profiles, the existing egress
+denylist, prebuilt ABI-specific caches, a 12-second stagger, and the shared
+12-second final coordinator:
+
+| round 1 runner | slots | skip | live | accepted | strict / Graph healthy | raw Graph healthy | live -> strict | accepted -> strict |
+|----------------|------:|-----:|-----:|---------:|-----------------------:|------------------:|---------------:|-------------------:|
+| Ubuntu 22.04 | 50 | 34 | 16 | 15 | 7 / 7 | 14.0% | 43.8% | 46.7% |
+| Ubuntu 24.04 | 50 | 28 | 22 | 21 | 14 / 14 | 28.0% | 63.6% | 66.7% |
+
+The apparent 24.04 advantage was promising but imprecise: two-sided Fisher
+values were `p=0.140` for raw Graph-healthy yield, `p=0.324` for live strict
+conversion, and `p=0.310` after accepted proof. Production was not changed on
+one round.
+
+A second concurrent round reproduced the exact contract in runs `29442353957`
+(Ubuntu 22.04) and `29442360731` (Ubuntu 24.04):
+
+| replication runner | slots | skip | live | accepted | strict / Graph healthy | raw Graph healthy | live -> strict | accepted -> strict |
+|--------------------|------:|-----:|-----:|---------:|-----------------------:|------------------:|---------------:|-------------------:|
+| Ubuntu 22.04 | 50 | 24 | 26 | 26 | 18 / 18 | 36.0% | 69.2% | 69.2% |
+| Ubuntu 24.04 | 50 | 23 | 27 | 26 | 19 / 19 | 38.0% | 70.4% | 73.1% |
+
+The first-round uplift did not replicate. Replication differences were only
+`+2.0pp` raw, `+1.1pp` on live conversion, and `+3.8pp` after accepted proof;
+all three Fisher values were `p=1.0`. The much larger movement was between
+batches: Ubuntu 22.04 rose from `14%` to `36%` raw Graph healthy while Ubuntu
+24.04 rose from `28%` to `38%`. That is direct evidence that time-varying
+hosted-runner egress composition dominates any stable OS-label effect in these
+samples.
+
+Pooling both valid rounds for descriptive, not promotion, purposes gives:
+
+| pooled runner | slots | skip | live | accepted | strict / Graph healthy | raw Graph healthy | live -> strict | accepted -> strict |
+|---------------|------:|-----:|-----:|---------:|-----------------------:|------------------:|---------------:|-------------------:|
+| Ubuntu 22.04 | 100 | 58 | 42 | 41 | 25 / 25 | 25.0% | 59.5% | 61.0% |
+| Ubuntu 24.04 | 100 | 51 | 49 | 47 | 33 / 33 | 33.0% | 67.3% | 70.2% |
+
+The pooled trend still favors 24.04, but remains non-decisive (`p=0.275` raw,
+`p=0.514` live, and `p=0.378` after accepted proof). Both images had zero
+runtime technical failures, and every one of the 58 strict accounts became
+Graph healthy. The runner image is therefore not promoted: production remains
+`ubuntu-22.04`. Remaining losses are upstream denylist admission and
+Microsoft post-proof rechallenge, not precompiled runtime or OutlookEmail
+import.
