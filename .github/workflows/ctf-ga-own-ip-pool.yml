@@ -20,6 +20,19 @@ on:
           - round_robin
           - historical_top_ab_v1
           - historical_top_v1
+      fresh_session_restart_policy:
+        description: "Full new registration session after a production fresh-policy stop: off, randomized A/B, or all eligible slots"
+        required: true
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - fresh_ab_v1
+          - fresh_all_v1
+      fresh_session_restart_cooldown_seconds:
+        description: "Cooldown before the second full registration session after a fresh-policy stop (0-300)"
+        required: true
+        default: "60"
       network_mode:
         description: "Use the fresh GA runner egress directly or route through the configured proxy pool"
         required: true
@@ -989,6 +1002,7 @@ jobs:
           OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS: ${{ inputs.pre_first_hold_warmup_ms }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'online_ads_ga_production_fast_fail' && '0' || '' }}
+          FRESH_SESSION_RESTART_POLICY: ${{ inputs.fresh_session_restart_policy }}
         run: |
           set +e
           mkdir -p Results/diagnostics
@@ -1001,6 +1015,7 @@ jobs:
           echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
           echo "fresh_absolute_timeout_seconds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS}"
           echo "fresh_rechallenge_rounds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS:-source-default}"
+          echo "fresh_session_restart_policy=${FRESH_SESSION_RESTART_POLICY}"
           if [ "$variant" = "paired_5s_then_thin" ] || [ "$variant" = "paired_thin_then_5s" ]; then
             if [ "${{ inputs.per_ip_max_registrations }}" -ne 1 ]; then
               echo "paired variants require per_ip_max_registrations=1" >&2
@@ -1057,6 +1072,99 @@ jobs:
                 --probe-timeout-minutes "${{ inputs.probe_timeout_minutes }}" \
                 >"$private_console" 2>&1
               ec=$?
+            elif [ "$variant" = "online_ads_ga_production_fast_fail" ] && [ "$FRESH_SESSION_RESTART_POLICY" != "off" ]; then
+              session_policy="$FRESH_SESSION_RESTART_POLICY"
+              session_arm="restart_treatment"
+              if [ "$session_policy" = "fresh_ab_v1" ] && [ $(( ${{ matrix.attempt }} % 2 )) -eq 0 ]; then
+                session_arm="single_session_control"
+              elif [ "$session_policy" != "fresh_ab_v1" ] && [ "$session_policy" != "fresh_all_v1" ]; then
+                echo "unsupported fresh session restart policy: $session_policy" >&2
+                exit 2
+              fi
+              cooldown="${{ inputs.fresh_session_restart_cooldown_seconds }}"
+              if ! [[ "$cooldown" =~ ^[0-9]+$ ]] || [ "$cooldown" -gt 300 ]; then
+                echo "fresh session restart cooldown must be 0..300" >&2
+                exit 2
+              fi
+
+              first_log="Results/diagnostics/fresh_session_first.log"
+              second_log="Results/diagnostics/fresh_session_second.log"
+              : > "$private_console"
+              echo "[SESSION_RESTART] first begin arm=$session_arm" >> "$private_console"
+              timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
+                >"$first_log" 2>&1
+              first_ec=$?
+              cat "$first_log" >> "$private_console"
+              echo "[SESSION_RESTART] first end exit_code=$first_ec" >> "$private_console"
+              first_fresh=0
+              first_strict=0
+              restart_attempted=0
+              second_ec=""
+              second_strict=0
+              second_fresh=0
+              second_riskblock=0
+              grep -q 'fresh rechallenge skipped by production policy rounds=0' "$first_log" && first_fresh=1
+              grep -q 'CreateAccount strict success' "$first_log" && first_strict=1
+
+              ec=$first_ec
+              if [ "$session_arm" = "restart_treatment" ] && [ "$first_fresh" -eq 1 ]; then
+                restart_attempted=1
+                echo "[SESSION_RESTART] cooldown_seconds=$cooldown" >> "$private_console"
+                sleep "$cooldown"
+                echo "[SESSION_RESTART] second begin" >> "$private_console"
+                GA_COORDINATOR_SLOT="${{ matrix.attempt }}-session2" \
+                  timeout --foreground 12m "${cmd[@]}" >"$second_log" 2>&1
+                second_ec=$?
+                cat "$second_log" >> "$private_console"
+                echo "[SESSION_RESTART] second end exit_code=$second_ec" >> "$private_console"
+                grep -q 'CreateAccount strict success' "$second_log" && second_strict=1
+                grep -q 'fresh rechallenge skipped by production policy rounds=0' "$second_log" && second_fresh=1
+                grep -qi 'riskblock' "$second_log" && second_riskblock=1
+                ec=$second_ec
+              fi
+
+              if [ "$first_ec" = "124" ] || [ "$second_ec" = "124" ]; then
+                echo "probe_timeout" > Results/diagnostics/probe_timeout.txt
+              fi
+              SESSION_POLICY="$session_policy" \
+              SESSION_ARM="$session_arm" \
+              SESSION_COOLDOWN="$cooldown" \
+              FIRST_EXIT_CODE="$first_ec" \
+              FIRST_FRESH="$first_fresh" \
+              FIRST_STRICT="$first_strict" \
+              RESTART_ATTEMPTED="$restart_attempted" \
+              SECOND_EXIT_CODE="$second_ec" \
+              SECOND_STRICT="$second_strict" \
+              SECOND_FRESH="$second_fresh" \
+              SECOND_RISKBLOCK="$second_riskblock" \
+              python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def as_bool(name):
+              return os.environ.get(name) == "1"
+
+          second_exit = os.environ.get("SECOND_EXIT_CODE", "")
+          row = {
+              "policy": os.environ["SESSION_POLICY"],
+              "arm": os.environ["SESSION_ARM"],
+              "cooldown_seconds": int(os.environ["SESSION_COOLDOWN"]),
+              "first_exit_code": int(os.environ["FIRST_EXIT_CODE"]),
+              "first_fresh_policy_skip": as_bool("FIRST_FRESH"),
+              "first_strict_marker": as_bool("FIRST_STRICT"),
+              "restart_attempted": as_bool("RESTART_ATTEMPTED"),
+              "second_exit_code": int(second_exit) if second_exit else None,
+              "second_strict_marker": as_bool("SECOND_STRICT"),
+              "second_fresh_policy_skip": as_bool("SECOND_FRESH"),
+              "second_riskblock_marker": as_bool("SECOND_RISKBLOCK"),
+              "recovered_strict": as_bool("RESTART_ATTEMPTED") and as_bool("SECOND_STRICT"),
+          }
+          Path("Results/diagnostics/fresh_session_restart.json").write_text(
+              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(row, ensure_ascii=False))
+          PY
             else
               timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
                 >"$private_console" 2>&1
@@ -1248,6 +1356,7 @@ jobs:
           RUNNER_LABEL: ${{ inputs.runner }}
           ORCHESTRATION_ID: ${{ inputs.orchestration_id }}
           ADS_PROFILE_POLICY_INPUT: ${{ inputs.ads_profile_policy }}
+          FRESH_SESSION_RESTART_POLICY_INPUT: ${{ inputs.fresh_session_restart_policy }}
           COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
           MAX_PARALLEL: ${{ inputs.max_parallel }}
           RUNTIME_MODE: ${{ inputs.runtime_mode }}
@@ -1278,6 +1387,7 @@ jobs:
           row = load_json("/tmp/private_classification.json")
           ingest = load_json("Results/diagnostics/outlook_email_ingest.json")
           ads_fetch = load_json("Results/diagnostics/ads_online_fetch.json")
+          session_restart = load_json("Results/diagnostics/fresh_session_restart.json")
           skipped = Path("Results/diagnostics/egress_skip.txt").exists()
           timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
           fresh_absolute_timed_out = Path(
@@ -1319,6 +1429,33 @@ jobs:
           if not re.fullmatch(r"[0-9a-f]{64}", ads_template_sha256):
               ads_template_sha256 = None
 
+          fresh_session_restart_policy = os.environ.get(
+              "FRESH_SESSION_RESTART_POLICY_INPUT", ""
+          )
+          if fresh_session_restart_policy not in {"off", "fresh_ab_v1", "fresh_all_v1"}:
+              fresh_session_restart_policy = None
+          fresh_session_restart_arm = str(session_restart.get("arm") or "") or None
+          if fresh_session_restart_arm not in {
+              None, "restart_treatment", "single_session_control"
+          }:
+              fresh_session_restart_arm = None
+          if fresh_session_restart_arm is None:
+              try:
+                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
+              except ValueError:
+                  matrix_slot = 0
+              if fresh_session_restart_policy == "fresh_ab_v1" and matrix_slot > 0:
+                  fresh_session_restart_arm = (
+                      "restart_treatment" if matrix_slot % 2 else "single_session_control"
+                  )
+              elif fresh_session_restart_policy == "fresh_all_v1":
+                  fresh_session_restart_arm = "restart_treatment"
+          fresh_session_restart_attempted = session_restart.get("restart_attempted") is True
+          fresh_session_first_fresh = session_restart.get("first_fresh_policy_skip") is True
+          fresh_session_recovered_strict = session_restart.get("recovered_strict") is True
+          fresh_session_second_fresh = session_restart.get("second_fresh_policy_skip") is True
+          fresh_session_second_riskblock = session_restart.get("second_riskblock_marker") is True
+
           # Publish only aggregate-safe coordinator timings so queue regressions
           # can be diagnosed from redacted verdicts without decrypting evidence.
           # Restrict parsing to the canonical live-probe log because the same
@@ -1344,6 +1481,7 @@ jobs:
               if isinstance(value, list):
                   result_values.extend(str(item) for item in value)
           accepted_result0 = any(item == "0" or item.endswith("|0") for item in result_values)
+          session_initial_accepted_result0 = accepted_result0 or fresh_session_first_fresh
           post_success_rechallenge = bool(row.get("risk_verify_post_success_challenge"))
           # Historical GA baseline classifiers predate the create_200 field,
           # but emit create_account_200 only after strict response-body checks
@@ -1445,6 +1583,14 @@ jobs:
               "ads_profile_selected_index": ads_profile_selected_index,
               "ads_profile_source_slot": ads_profile_source_slot,
               "ads_template_sha256": ads_template_sha256,
+              "fresh_session_restart_policy": fresh_session_restart_policy,
+              "fresh_session_restart_arm": fresh_session_restart_arm,
+              "fresh_session_restart_attempted": fresh_session_restart_attempted,
+              "fresh_session_initial_accepted_result0": session_initial_accepted_result0,
+              "fresh_session_first_fresh": fresh_session_first_fresh,
+              "fresh_session_recovered_strict": fresh_session_recovered_strict,
+              "fresh_session_second_fresh": fresh_session_second_fresh,
+              "fresh_session_second_riskblock": fresh_session_second_riskblock,
               "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
               "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
               "runtime_mode": os.environ.get("RUNTIME_MODE", ""),

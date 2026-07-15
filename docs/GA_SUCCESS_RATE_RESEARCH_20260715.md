@@ -758,3 +758,38 @@ Graph-healthy account, so the parent stopped successfully after one batch.
 This feature does not improve captcha conversion. It fixes the more important
 contract mismatch between "number of jobs started" and "number of usable
 accounts delivered", while retaining a hard spend/risk ceiling.
+
+## Prospective ADS profile-index A/B
+
+A local join of 82 production-fast-fail slots initially found a post-hoc
+association: selected ADS indices `{0,2,5,12}` had `14/16 = 87.5%`
+accepted-to-strict conversion, versus `33/63 = 52.4%` for other indices
+(unadjusted Fisher `p=0.0097`). Because the set was selected after observing the
+same data, it was treated only as a hypothesis.
+
+Commit `be110be` added a public-safe, same-run randomized policy. Run
+`29422076939` first verified balanced arm assignment and exact index/hash
+observability. Run `29422525353` then dispatched 100 slots:
+
+| arm | slots | live | accepted | strict | Graph healthy | accepted->strict |
+|-----|------:|-----:|---------:|-------:|--------------:|-----------------:|
+| historical top indices | 50 | 16 | 15 | 8 | 8 | 53.3% |
+| non-top control | 50 | 20 | 19 | 11 | 10 | 57.9% |
+
+The prospective result reverses the historical direction (`-4.6pp`, two-sided
+Fisher `p=1.0`). Raw Graph-healthy yield was also lower (`16%` versus `20%`).
+Therefore the top-index policy is rejected and production remains
+`ads_profile_policy=round_robin`. This is a concrete example of why a
+high-looking retrospective profile cluster must not be promoted without an
+out-of-sample test.
+
+## Next conversion hypothesis: full session restart after fresh
+
+Deep handling inside the same fresh challenge has already produced zero strict
+recoveries. The next isolated hypothesis instead discards the entire browser
+process and account attempt after a production fresh-policy stop, waits a
+bounded cooldown, and starts one new registration session on the same egress.
+The second process uses a distinct coordinator slot identity so it cannot reuse
+the first final reservation. It is attempted only for fresh-policy outcomes,
+not explicit risk blocks, and remains disabled by default pending randomized
+A/B evidence.

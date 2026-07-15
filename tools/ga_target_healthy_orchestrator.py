@@ -331,6 +331,9 @@ def summarize_verdicts(
         "observed_config": {
             "variant": unique_values(rows, "variant"),
             "ads_profile_policy": unique_values(rows, "ads_profile_policy"),
+            "fresh_session_restart_policy": unique_values(
+                rows, "fresh_session_restart_policy"
+            ),
             "coordinator_mode": unique_values(rows, "coordinator_mode"),
             "max_parallel": unique_values(rows, "max_parallel"),
             "runtime_mode": unique_values(rows, "runtime_mode"),
