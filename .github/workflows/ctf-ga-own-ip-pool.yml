@@ -233,6 +233,34 @@ jobs:
             grep -q -- '--time-warp-wall-ms 6500' run_xvfb_natural_fresh_5s_1920.sh
             grep -q 'captcha phase=initial handler=natural' protocol_runtime_probe.py
             grep -q 'captcha phase=fresh handler=time_warp_hold' protocol_runtime_probe.py
+            python3 - <<'PY'
+          import ast
+          import re
+          from pathlib import Path
+
+          source = Path("protocol_runtime_probe.py").read_text(encoding="utf-8")
+          parser_flags = set()
+          for node in ast.walk(ast.parse(source)):
+              if not (
+                  isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "add_argument"
+              ):
+                  continue
+              for arg in node.args:
+                  if (
+                      isinstance(arg, ast.Constant)
+                      and isinstance(arg.value, str)
+                      and arg.value.startswith("--")
+                  ):
+                      parser_flags.add(arg.value)
+
+          wrapper = Path("run_xvfb_natural_fresh_5s_1920.sh").read_text(encoding="utf-8")
+          wrapper_flags = set(re.findall(r"^\s+(--[a-z0-9-]+)(?:\s|\\)", wrapper, re.MULTILINE))
+          unknown = sorted(wrapper_flags - parser_flags)
+          assert not unknown, f"unknown protocol_runtime_probe flags: {unknown}"
+          print({"wrapper_flags": len(wrapper_flags), "unknown": unknown})
+          PY
           fi
           grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py
           grep -q 'fresh_rechallenge_hold_budget' controllers/base_controller.py
