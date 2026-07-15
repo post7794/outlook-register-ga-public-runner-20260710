@@ -898,3 +898,21 @@ fast-fail unchanged. It uses the same 35-profile blocked assignment as the
 warmup experiment. Enabling both experiments together is rejected to prevent a
 two-variable run. Production remains `signup_country_policy=source_default`
 until a prospective Graph-healthy result justifies changing it.
+
+Smoke run `29431525239` verified five assignments per arm and six admitted
+probes. Decrypted request evidence confirmed that every admitted US assignment
+actually sent `countryCode=US`, and every LK assignment sent `countryCode=LK`.
+
+Prospective run `29431975470` then dispatched 100 slots:
+
+| arm | slots | skip | live | accepted | strict | Graph healthy | live -> strict | accepted -> strict |
+|-----|------:|-----:|-----:|---------:|-------:|--------------:|---------------:|-------------------:|
+| US treatment | 50 | 28 | 22 | 20 | 12 | 12 | 54.5% | 60.0% |
+| LK control | 50 | 30 | 20 | 19 | 13 | 12 | 65.0% | 68.4% |
+
+US moved both conversion endpoints in the wrong direction (`-10.5pp` live and
+`-8.4pp` after accepted proof). The differences are imprecise (two-sided Fisher
+`p=0.543` and `p=0.741`), while raw Graph-healthy yield was exactly equal at
+`12/50` per arm. The country-consistency hypothesis is rejected. Production
+remains `signup_country_policy=source_default`; an intuitive environment
+mismatch is not sufficient evidence to rewrite account identity fields.
