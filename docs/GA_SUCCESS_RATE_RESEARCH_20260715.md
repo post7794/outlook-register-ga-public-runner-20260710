@@ -686,3 +686,42 @@ Run `29409529013` subsequently smoke-tested the updated ingestion workflow. All
 ten public verdicts contained `graph_import_attempts`; both strict accounts were
 Graph healthy on attempt one, and no workflow/runtime syntax regression was
 observed.
+
+## Final coordinator gap A-B-A
+
+The next controlled experiment changed only the server-side `final` reservation
+gap while keeping source `875b0571d5b9c88b89a5bbc64f30488ee9565962`,
+`max_parallel=20`, `final_only`, prebuilt runtime, the egress denylist, and the
+Graph ingestion path fixed. The sequence was `12s -> 15s -> 12s`; the service
+was restored between arms and each experimental change had an automatic
+rollback timer.
+
+| run | gap | live | accepted | strict / Graph healthy | wall min | Graph healthy/min |
+|-----|----:|-----:|---------:|-----------------------:|---------:|------------------:|
+| `29410661495` | 12s | 25 | 24 | 18 / 18 | 8.70 | 2.069 |
+| `29411367396` | 15s | 23 | 23 | 14 / 14 | 9.95 | 1.407 |
+| `29412480956` | 12s | 23 | 21 | 12 / 12 | 7.43 | 1.614 |
+
+The decisive mechanism is queue aging, not a different hold gesture. Decrypted
+canonical live-probe logs confirmed the configured gap and gave these final
+reservation waits:
+
+| arm | reservations | median wait | p90 wait | max wait |
+|-----|-------------:|------------:|---------:|---------:|
+| 12s first | 33 | 103.0s | 160.9s | 173.1s |
+| 15s control | 32 | 151.0s | 229.9s | 246.2s |
+| 12s replicate | 26 | 104.6s | 157.8s | 160.2s |
+
+Pooling the two 12-second arms gives `30 Graph healthy / 16.13 min =
+1.860/min`, versus `14 / 9.95 min = 1.407/min` for the 15-second control, a
+`32.2%` observed throughput gain. Live strict conversion stayed effectively
+flat at this sample size (`62.5%` versus `60.9%`); fresh challenge and risk-block
+rates moved in opposite directions across individual arms, so no conversion
+claim is made from those low-N differences. All 44 strict creations were Graph
+healthy and no probe timed out.
+
+Production therefore uses a 12-second final gap with a retained 15-second
+rollback file. Workflow defaults now select `online_ads_ga_production_fast_fail`
+and `coordinator_mode=final_only`. Redacted verdicts also expose the final
+reservation count, wait list, and observed gap so future queue analysis no
+longer requires evidence decryption.

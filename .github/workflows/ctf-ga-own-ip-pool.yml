@@ -18,7 +18,7 @@ on:
       variant:
         description: "Probe variant to run on each fresh GA egress IP"
         required: true
-        default: "default"
+        default: "online_ads_ga_production_fast_fail"
         type: choice
         options:
           - default
@@ -80,7 +80,7 @@ on:
       coordinator_mode:
         description: "Coordinator policy after denylist. final_only allows concurrent entry but still serializes decisive captcha finals."
         required: true
-        default: "off"
+        default: "final_only"
         type: choice
         options:
           - "off"
@@ -88,7 +88,7 @@ on:
           - entry_final
           - final_only
       max_parallel:
-        description: "Maximum simultaneous matrix jobs; 20 is the verified sweet point with final_only and a 15s coordinator gap."
+        description: "Maximum simultaneous matrix jobs; 20 is the verified sweet point with final_only and a 12s coordinator gap."
         required: true
         default: "20"
       runtime_mode:
@@ -1156,6 +1156,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
           def load_json(path):
@@ -1177,6 +1178,25 @@ jobs:
           fresh_policy_skipped = Path(
               "Results/diagnostics/fresh_rechallenge_policy_skip.txt"
           ).exists()
+
+          # Publish only aggregate-safe coordinator timings so queue regressions
+          # can be diagnosed from redacted verdicts without decrypting evidence.
+          # Restrict parsing to the canonical live-probe log because the same
+          # coordinator line is mirrored into wrapper logs.
+          coordinator_final_wait_ms = []
+          coordinator_final_gap_ms = []
+          coordinator_pattern = re.compile(
+              r"\[Coordinator\] stage=final seq=\d+ lease=\S+ "
+              r"wait_ms=(\d+) gap_ms=(\d+) reused=False"
+          )
+          for log_path in Path("Results/protocol_runtime").glob("*_live_probe.log"):
+              try:
+                  log_text = log_path.read_text(encoding="utf-8", errors="replace")
+              except Exception:
+                  continue
+              for match in coordinator_pattern.finditer(log_text):
+                  coordinator_final_wait_ms.append(int(match.group(1)))
+                  coordinator_final_gap_ms.append(int(match.group(2)))
 
           result_values = []
           for key in ("network_collector_results", "route_collector_results", "route_merged_results"):
@@ -1298,6 +1318,9 @@ jobs:
               "human_success": int(row.get("human_success") or 0),
               "create_request": bool(row.get("create_request")),
               "probe_timed_out": timed_out,
+              "coordinator_final_reservations": len(coordinator_final_wait_ms),
+              "coordinator_final_wait_ms": coordinator_final_wait_ms,
+              "coordinator_final_gap_ms": sorted(set(coordinator_final_gap_ms)),
           }
           out = Path("public-safe-verdict") / f"verdict-{safe['attempt']}.json"
           out.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
