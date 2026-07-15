@@ -23,10 +23,14 @@ on:
         description: "Natural-hold final PX561 treatment: minimal, ads_safe, or off control"
         required: true
         default: "minimal"
+      natural_w0_bridge:
+        description: "Exercise the verified neutral-final to W0 bridge while keeping a natural 10s hold"
+        required: true
+        default: "false"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "986a76d0cd2bdd81bcd42f33007e5da257659bc2"
+        default: "05b0d60cdfed981716cae50d8f23bcfc16c57306"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -60,6 +64,7 @@ jobs:
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
+      NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -90,8 +95,12 @@ jobs:
           mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
           if mode not in {"minimal", "ads_safe", "off"}:
               raise SystemExit("natural_final_proof_mode must be minimal, ads_safe, or off")
+          bridge = os.environ.get("NATURAL_W0_BRIDGE", "")
+          if bridge not in {"true", "false"}:
+              raise SystemExit("natural_w0_bridge must be true or false")
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"natural final proof mode={mode}")
+          print(f"natural W0 bridge={bridge}")
           PY
 
       - name: Checkout private recovery control plane
@@ -358,6 +367,10 @@ jobs:
           probe_safe="$RUNNER_TEMP/recovery-probe-safe.log"
           log="$RUNNER_TEMP/recovery-runtime.log"
           err="$RUNNER_TEMP/recovery-runtime.err.log"
+          natural_bridge_args=()
+          if [ "$NATURAL_W0_BRIDGE" = "true" ]; then
+            natural_bridge_args+=(--natural-w0-bridge)
+          fi
           test "$(git -C "$runtime" rev-parse HEAD)" = '875b0571d5b9c88b89a5bbc64f30488ee9565962'
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cd "$runtime"
@@ -375,6 +388,7 @@ jobs:
               --require-service-abuse-preflight \
               --natural-hold-profile registration_10s \
               --natural-final-proof-mode "$NATURAL_FINAL_PROOF_MODE" \
+              "${natural_bridge_args[@]}" \
               --parent-retry-max 2 \
               --writeback-outlook-email \
               --outlook-email-config "$private/outlook-email.json" \
@@ -496,6 +510,7 @@ jobs:
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
+              "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
               "runner": "ubuntu-22.04",
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,

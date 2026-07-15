@@ -81,6 +81,13 @@ This distinction is material: the timing-only `off` recovery baseline reached
 responses. Registration success evidence was produced with `minimal`, not
 `off`, so hold duration alone was not an equivalent runtime treatment.
 
+`natural_w0_bridge=true` is a separate bounded treatment. It keeps a rejected
+final neutral long enough to exercise the same W0 handoff used by the one
+verified automatic recovery, while retaining the natural 9.5-12.5s physical
+hold. The bridge may alter the iframe-facing final/W0 response sequence, so a
+collector `result|0` is only an intermediate signal; real
+`risk/verify state=continue` and `TierRestore` 2xx remain mandatory.
+
 The private repository retains the canonical recovery source and an equivalent
 workflow template, but its organization currently cannot allocate hosted
 runners because of an Actions billing restriction. Run `29446705922` was
@@ -105,7 +112,8 @@ artifacts are named `ga-auto-recovery-safe-<run_id>-<slot>` so every slot can
 be audited independently. Set `natural_final_proof_mode=minimal` for the
 registration-equivalent treatment, `ads_safe` for the recovery-shaped BFA
 treatment, or `off` for the prior live-payload control.
-Keep the defaults `[1]` and `minimal` for scheduled operation.
+Keep the defaults `[1]`, `minimal`, and `natural_w0_bridge=false` for scheduled
+operation until the treatment proves the complete TierRestore/writeback loop.
 
 Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,
