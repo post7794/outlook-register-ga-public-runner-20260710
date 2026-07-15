@@ -12,7 +12,7 @@ fresh ubuntu-22.04 runner
 -> list only inactive/quarantined/service_abuse accounts
 -> atomically lease one account through ga-coordinator
 -> materialize credentials only in runner.temp (mode 0600)
--> exact v1.0.0 recovery state machine
+-> production registration natural hold (9.5-12.5s, 22s warmup, one iframe attempt)
 -> TierRestore 2xx
 -> Graph Inbox 200
 -> OutlookEmail writeback + immediate health enrollment
@@ -59,6 +59,14 @@ silently releasing an account into a duplicate runner.
 Public execution workflow: `.github/workflows/ctf-ga-service-abuse-auto.yml`.
 It checks out the pinned private recovery-control source from
 `xbox-cn/outlook-register-ga-xvfb-action-20260707` before any account work.
+
+The browser runtime is pinned to registration production commit
+`875b0571d5b9c88b89a5bbc64f30488ee9565962`. Recovery uses the same natural
+hold envelope and first-hold warmup, but deliberately keeps `hold_retries=1`;
+Microsoft parent-page Retry remains bounded at two and iframe Retry is never
+clicked. The accelerated 5s path remains available for experiments but is not
+the automatic-recovery production path because it recovered 0/6 GA fresh
+challenge slots in the latest registration validation.
 
 The private repository retains the canonical recovery source and an equivalent
 workflow template, but its organization currently cannot allocate hosted
