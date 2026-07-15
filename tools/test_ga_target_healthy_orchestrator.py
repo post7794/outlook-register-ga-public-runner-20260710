@@ -35,6 +35,8 @@ def verdict(attempt, category, *, marker="target-b001", **overrides):
         "signup_country_code": None,
         "signup_dob_policy": "source_default",
         "signup_dob_mode": None,
+        "email_domain_policy": "source_default",
+        "email_domain": None,
         "coordinator_mode": "final_only",
         "max_parallel": 20,
         "runtime_mode": "prebuilt",
@@ -166,6 +168,10 @@ class VerdictSummaryTests(unittest.TestCase):
             summary["observed_config"]["signup_dob_policy"], ["source_default"]
         )
         self.assertEqual(summary["observed_config"]["signup_dob_mode"], [None])
+        self.assertEqual(
+            summary["observed_config"]["email_domain_policy"], ["source_default"]
+        )
+        self.assertEqual(summary["observed_config"]["email_domain"], [None])
         self.assertAlmostEqual(summary["graph_healthy_per_min"], 0.1)
 
     def test_rejects_wrong_orchestration_marker(self):

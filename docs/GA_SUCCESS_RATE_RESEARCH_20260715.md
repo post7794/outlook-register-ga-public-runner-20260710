@@ -959,3 +959,17 @@ The randomized-DOB hypothesis is rejected. Production remains
 `signup_dob_policy=source_default`; January 1 may look synthetic, but changing
 it breaks this protocol/CreateAccount state boundary and materially lowers
 end-to-end account yield.
+
+## Next conversion hypothesis: mailbox namespace
+
+Historical source and release configurations support both `hotmail.com` and
+`outlook.com`, while current production always uses `outlook.com`. Namespace is
+present in memberName, CheckAvailable, the host-risk signature, CreateAccount,
+and the subsequent Graph import, so its effect must be measured end to end
+rather than inferred from captcha acceptance.
+
+The workflow now offers blocked `domain_ab_hotmail_outlook_v1`, with explicit
+Hotmail treatment and Outlook control. It changes only the generated config's
+email suffix after the ADS profile is applied. Production remains
+`email_domain_policy=source_default` (Outlook), and the one-experiment guard now
+covers warmup, country, DOB, and namespace policies.
