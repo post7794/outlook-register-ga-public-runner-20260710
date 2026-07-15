@@ -87,6 +87,10 @@ verified automatic recovery, while retaining the natural 9.5-12.5s physical
 hold. The bridge may alter the iframe-facing final/W0 response sequence, so a
 collector `result|0` is only an intermediate signal; real
 `risk/verify state=continue` and `TierRestore` 2xx remain mandatory.
+When `natural_server_challenge_rounds` is above one, another hold is allowed
+only after the current round records collector `result|0` and a later real
+`risk/verify` response issues a new HumanCaptcha continuation. A `result|-1`,
+`HumanCaptcha_Failure`, or a plain visible iframe Retry never opens a round.
 
 The private repository retains the canonical recovery source and an equivalent
 workflow template, but its organization currently cannot allocate hosted
@@ -113,7 +117,9 @@ be audited independently. Set `natural_final_proof_mode=minimal` for the
 registration-equivalent treatment, `ads_safe` for the recovery-shaped BFA
 treatment, or `off` for the prior live-payload control.
 Keep the defaults `[1]`, `minimal`, and `natural_w0_bridge=false` for scheduled
-operation until the treatment proves the complete TierRestore/writeback loop.
+operation; `natural_server_challenge_rounds` also defaults to `1`. Use a
+bounded value such as `3` only for the W0/fresh-round treatment until it proves
+the complete TierRestore/writeback loop.
 
 Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,

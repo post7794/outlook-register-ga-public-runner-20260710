@@ -27,10 +27,14 @@ on:
         description: "Exercise the verified neutral-final to W0 bridge while keeping a natural 10s hold"
         required: true
         default: "false"
+      natural_server_challenge_rounds:
+        description: "Maximum fresh Microsoft HumanCaptcha rounds after accepted result|0 (1-8)"
+        required: true
+        default: "1"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "05b0d60cdfed981716cae50d8f23bcfc16c57306"
+        default: "4daefd8ab5a9dcbe82b6e234a7eb53e3625da202"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -65,6 +69,7 @@ jobs:
       RECOVERY_SLOT: ${{ matrix.slot }}
       NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
+      NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -98,9 +103,13 @@ jobs:
           bridge = os.environ.get("NATURAL_W0_BRIDGE", "")
           if bridge not in {"true", "false"}:
               raise SystemExit("natural_w0_bridge must be true or false")
+          rounds = int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS", "0"))
+          if not 1 <= rounds <= 8:
+              raise SystemExit("natural_server_challenge_rounds must be in range 1..8")
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"natural final proof mode={mode}")
           print(f"natural W0 bridge={bridge}")
+          print(f"natural server challenge rounds={rounds}")
           PY
 
       - name: Checkout private recovery control plane
@@ -389,6 +398,7 @@ jobs:
               --natural-hold-profile registration_10s \
               --natural-final-proof-mode "$NATURAL_FINAL_PROOF_MODE" \
               "${natural_bridge_args[@]}" \
+              --natural-server-challenge-rounds "$NATURAL_SERVER_CHALLENGE_ROUNDS" \
               --parent-retry-max 2 \
               --writeback-outlook-email \
               --outlook-email-config "$private/outlook-email.json" \
@@ -511,6 +521,7 @@ jobs:
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
+              "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
               "runner": "ubuntu-22.04",
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
