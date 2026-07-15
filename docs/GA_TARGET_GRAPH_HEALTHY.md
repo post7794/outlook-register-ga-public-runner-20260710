@@ -89,3 +89,24 @@ python tools/ga_target_healthy_orchestrator.py `
   --max-dispatched 80 `
   --dry-run
 ```
+
+## End-to-end validation
+
+Two parent runs exercised both terminal branches:
+
+| parent run | target / cap | child batches | achieved | parent decision |
+|------------|-------------:|--------------:|---------:|-----------------|
+| `29418596160` | 4 / 15 | 3 x 5 | 2 | failed: cap exhausted |
+| `29419530072` | 1 / 15 | 1 x 5 | 1 | success: stopped immediately |
+
+The first run's child batches produced `2, 0, 0` Graph-healthy accounts. The
+last two batches still accepted all six live initial proofs, but ended in fresh
+challenge or explicit risk block; the parent correctly continued and then
+failed with `max_dispatched_exhausted_before_target` instead of calling a
+workflow completion a success.
+
+The second run had four denylist skips and one live slot. That one slot was
+strict CreateAccount and Graph healthy, so the parent stopped after the first
+batch. Both runs proved same-repository dispatch with `github.token`, child
+polling, exact verdict/marker validation, safe summary upload, bounded backfill,
+and target-based success evaluation.

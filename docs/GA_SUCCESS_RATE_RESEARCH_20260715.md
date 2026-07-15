@@ -738,3 +738,23 @@ five verdicts self-reported the intended defaults (`production_fast_fail`,
 observed the 12-second final gap, and produced two strict / two Graph-healthy
 accounts. This closes the gap between the documented production recipe and the
 actual workflow-dispatch defaults.
+
+## Target Graph-healthy backfill
+
+Fixed matrix size was the next operational bottleneck: a 100-slot dispatch can
+yield very different usable-account counts as the GA egress mix changes. Commit
+`335b925` adds a parent workflow that dispatches bounded child batches and stops
+only on cumulative `account_lifecycle=graph_healthy`, with a hard total-slot
+ceiling.
+
+Parent run `29418596160` tested the failure boundary with target 4 and cap 15.
+It dispatched three five-slot children (`29418607901`, `29418834665`,
+`29419136258`) and obtained `2 + 0 + 0` Graph-healthy accounts. It preserved all
+safe summaries and failed explicitly with `max_dispatched_exhausted_before_target`.
+Parent run `29419530072` tested the success boundary with target 1: its first
+five-slot child `29419544110` had four denylist skips and one live strict /
+Graph-healthy account, so the parent stopped successfully after one batch.
+
+This feature does not improve captcha conversion. It fixes the more important
+contract mismatch between "number of jobs started" and "number of usable
+accounts delivered", while retaining a hard spend/risk ceiling.
