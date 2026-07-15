@@ -26,6 +26,7 @@ on:
           - historical_ga_highrate_336a973
           - historical_ga_fresh_rechallenge
           - online_ads_ga_fresh_rechallenge
+          - online_ads_ga_production_fast_fail
           - online_ads_ga_fresh_5s_recovery
           - online_ads_ga_5s_hold_transplant
           - offline_ads_like_ga_fresh_rechallenge
@@ -142,7 +143,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' && 'ae0745a95f73bec3ab24b9a5ce461bae1fa4a371' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '01086ae6d319a8bbf019ddb34267edd59ac7ec31' || (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
+          ref: ${{ inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'online_ads_ga_fresh_rechallenge' && '31dfe0e28e5da13645a455dba6737c19346faf63' || inputs.variant == 'online_ads_ga_production_fast_fail' && '875b0571d5b9c88b89a5bbc64f30488ee9565962' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' && 'ae0745a95f73bec3ab24b9a5ce461bae1fa4a371' || inputs.variant == 'online_ads_ga_5s_hold_transplant' && '01086ae6d319a8bbf019ddb34267edd59ac7ec31' || (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
           clean: true
@@ -201,11 +202,13 @@ jobs:
           PY
 
       - name: Verify online ADS source
-        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' || inputs.variant == 'online_ads_ga_5s_hold_transplant' }}
+        if: ${{ inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_production_fast_fail' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' || inputs.variant == 'online_ads_ga_5s_hold_transplant' }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ inputs.variant }}" = "online_ads_ga_fresh_5s_recovery" ]; then
+          if [ "${{ inputs.variant }}" = "online_ads_ga_production_fast_fail" ]; then
+            expected=875b0571d5b9c88b89a5bbc64f30488ee9565962
+          elif [ "${{ inputs.variant }}" = "online_ads_ga_fresh_5s_recovery" ]; then
             expected=ae0745a95f73bec3ab24b9a5ce461bae1fa4a371
           elif [ "${{ inputs.variant }}" = "online_ads_ga_5s_hold_transplant" ]; then
             expected=01086ae6d319a8bbf019ddb34267edd59ac7ec31
@@ -220,6 +223,21 @@ jobs:
           grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
           grep -q 'minimal_natural_hold' protocol_runtime_probe.py
           grep -q -- '--final-proof-normalizer minimal_natural_hold' run_xvfb_natural_1920.sh
+          if [ "${{ inputs.variant }}" = "online_ads_ga_production_fast_fail" ]; then
+            grep -q 'fresh_rechallenge_policy_skip' controllers/base_controller.py
+            grep -q 'check_available_is_username_conflict' controllers/base_controller.py
+            python3 - <<'PY'
+          from controllers.base_controller import (
+              check_available_is_username_conflict,
+              parse_fresh_rechallenge_rounds,
+          )
+          assert parse_fresh_rechallenge_rounds("0") == 0
+          assert parse_fresh_rechallenge_rounds("99") == 3
+          assert check_available_is_username_conflict({"isAvailable": False})
+          assert check_available_is_username_conflict({"error": {"code": 1220}})
+          assert not check_available_is_username_conflict({"error": {"code": 500}})
+          PY
+          fi
           if [ "${{ inputs.variant }}" = "online_ads_ga_5s_hold_transplant" ]; then
             test -f run_xvfb_natural_5s_transplant_1920.sh
             grep -q -- '--time-warp-wall-ms 6500' run_xvfb_natural_5s_transplant_1920.sh
@@ -590,7 +608,7 @@ jobs:
           grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
 
       - name: Fetch and apply online ADS fingerprint
-        if: ${{ (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' || inputs.variant == 'online_ads_ga_5s_hold_transplant') && steps.egress.outputs.should_probe != 'false' }}
+        if: ${{ (inputs.variant == 'online_ads_ga_fresh_rechallenge' || inputs.variant == 'online_ads_ga_production_fast_fail' || inputs.variant == 'online_ads_ga_fresh_5s_recovery' || inputs.variant == 'online_ads_ga_5s_hold_transplant') && steps.egress.outputs.should_probe != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -867,6 +885,7 @@ jobs:
         env:
           OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS: ${{ inputs.pre_first_hold_warmup_ms }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
+          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'online_ads_ga_production_fast_fail' && '0' || '' }}
         run: |
           set +e
           mkdir -p Results/diagnostics
@@ -878,6 +897,7 @@ jobs:
           variant="${{ inputs.variant }}"
           echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
           echo "fresh_absolute_timeout_seconds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS}"
+          echo "fresh_rechallenge_rounds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS:-source-default}"
           if [ "$variant" = "paired_5s_then_thin" ] || [ "$variant" = "paired_thin_then_5s" ]; then
             if [ "${{ inputs.per_ip_max_registrations }}" -ne 1 ]; then
               echo "paired variants require per_ip_max_registrations=1" >&2
@@ -922,7 +942,7 @@ jobs:
               cmd=(./run_xvfb_natural_5s_transplant_1920.sh)
             elif [ "$variant" = "online_ads_ga_fresh_5s_recovery" ]; then
               cmd=(./run_xvfb_natural_fresh_5s_1920.sh)
-            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
+            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_fresh_rechallenge" ] || [ "$variant" = "online_ads_ga_production_fast_fail" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
               cmd=(./run_xvfb_natural_1920.sh)
             else
               cmd=(./run_xvfb_natural_1920.sh)
@@ -944,9 +964,12 @@ jobs:
               fi
             fi
           fi
+          if grep -q 'fresh rechallenge skipped by production policy rounds=0' "$private_console" 2>/dev/null; then
+            : > Results/diagnostics/fresh_rechallenge_policy_skip.txt
+          fi
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
           echo "public_safe_probe_summary:"
-          grep -E "\[PUBLIC_AB\]|outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out|fresh rechallenge absolute timeout|fresh rechallenge no progress|fresh rechallenge idle timeout" "$private_console" 2>/dev/null \
+          grep -E "\[PUBLIC_AB\]|outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out|fresh rechallenge skipped by production policy|fresh rechallenge absolute timeout|fresh rechallenge no progress|fresh rechallenge idle timeout" "$private_console" 2>/dev/null \
             | sed -E 's/[[:alnum:]._%+-]+@(outlook|hotmail)\.com/<redacted-email>/g' \
             | tail -40 || true
           # Matrix attempts are allowed to fail individually. The summarize job
@@ -1137,6 +1160,9 @@ jobs:
           fresh_idle_timed_out = Path(
               "Results/diagnostics/fresh_rechallenge_idle_timeout.jsonl"
           ).exists()
+          fresh_policy_skipped = Path(
+              "Results/diagnostics/fresh_rechallenge_policy_skip.txt"
+          ).exists()
 
           result_values = []
           for key in ("network_collector_results", "route_collector_results", "route_merged_results"):
@@ -1210,6 +1236,9 @@ jobs:
           elif fresh_idle_timed_out:
               category = "technical_failure"
               reason = "fresh_idle_timeout_before_accepted_checkpoint"
+          elif accepted_result0 and fresh_policy_skipped:
+              category = "post_proof_rechallenge"
+              reason = "collector_result0_then_production_fast_fail"
           elif accepted_result0 and post_success_rechallenge:
               # A repeated challenge is not evidence of an IP block. Keep it
               # visible as a post-proof technical outcome instead of turning a
@@ -1248,6 +1277,7 @@ jobs:
               "post_success_rechallenge": post_success_rechallenge,
               "fresh_rechallenge_absolute_timed_out": fresh_absolute_timed_out,
               "fresh_rechallenge_idle_timed_out": fresh_idle_timed_out,
+              "fresh_rechallenge_policy_skipped": fresh_policy_skipped,
               "human_loaded": int(row.get("human_loaded") or 0),
               "human_success": int(row.get("human_success") or 0),
               "create_request": bool(row.get("create_request")),

@@ -439,3 +439,71 @@ increase the deadline, and does not send post-primary variants after a reject.
 If this primary scalar anchor also fails, repeated fresh salvage should be
 removed from the production throughput path and retained only as an explicit
 research variant.
+
+## Scalar matching fails; production should stop spending rounds on fresh challenges
+
+Run `29384434857` tested source
+`ae0745a95f73bec3ab24b9a5ce461bae1fa4a371` with the scalar anchor enabled:
+
+```text
+30 dispatched
+ 15 egress-denylist skips
+ 15 live probes
+   14 accepted initial result|0
+    8 strict CreateAccount
+    8 Graph healthy
+    4 entered a fresh HumanCaptcha
+    2 accepted proof -> explicit riskBlock
+    1 pre-proof explicit riskBlock
+```
+
+Rates with their denominators:
+
+```text
+raw strict                  8/30 = 26.7%
+live-probe strict           8/15 = 53.3%
+accepted-checkpoint strict  8/14 = 57.1%
+Graph after creation         8/8 = 100%
+Graph healthy / run minute        = 0.569/min
+```
+
+All four fresh slots switched from `minimal_natural_hold` to `ads_safe`
+before the new challenge shell. All twelve fresh invocations passed the
+readiness gate. Eight produced a decisive PX561 and all eight returned
+`result|-1`; four produced no decisive final. The anchor was not merely
+configured but observed on the wire:
+
+```text
+XGhm=85.2..88.7
+Bzt=509.3..727.0
+STk=548..776
+fresh collector result|0 = 0
+risk/verify continue      = 0
+CreateAccount             = 0
+```
+
+This overlaps the accepted local reference (`XGhm≈87.6`, `Bzt≈517`) yet does
+not change the collector verdict. Therefore XGhm/Bzt are correlated fields,
+not an independent acceptance threshold. The fresh decision remains bound to
+the wider session, timing, event, browser, and server-issued challenge state.
+Increasing timeouts, rounds, or fitting more isolated scalars is no longer a
+supported production optimization.
+
+Source `875b0571d5b9c88b89a5bbc64f30488ee9565962` adds a production policy that
+allows `OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS=0`. The new
+`online_ads_ga_production_fast_fail` variant keeps the proven initial natural
+path unchanged and stops immediately when Microsoft issues a fresh
+HumanCaptcha. The three-round exact handler remains pinned separately as the
+research variant. The same source also rerolls a generated username only when
+CheckAvailable explicitly returns `isAvailable=false` or error code `1220`;
+transient/unknown backend errors are not retried as username conflicts.
+
+The production comparison must optimize the complete output metric:
+
+```text
+Graph healthy / minute
+```
+
+It must also verify that initial accepted-proof rate and Graph health after
+creation do not regress. A lower wall time alone is not sufficient if it
+damages the one-challenge path.
