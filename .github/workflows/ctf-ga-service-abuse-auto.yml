@@ -82,7 +82,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "24bb4f8f33051551729cac40c5fbb5361dd36205"
+        default: "3e500ac0d6c444bfdffc5e6e900ea59b2278ed3d"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -244,7 +244,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '24bb4f8f33051551729cac40c5fbb5361dd36205' }}
+          ref: ${{ inputs.recovery_source_ref || '3e500ac0d6c444bfdffc5e6e900ea59b2278ed3d' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -545,8 +545,11 @@ jobs:
             graph_http=$(curl -sS --max-time 20 "${proxy_args[@]}" -o /dev/null -w '%{http_code}' \
               'https://graph.microsoft.com/v1.0/$metadata' 2>/dev/null || true)
           fi
-          IP1="$ip1" IP2="$ip2" LOGIN_HTTP="$login_http" TOKEN_HTTP="$token_http" GRAPH_HTTP="$graph_http" "$VENV_PYTHON" - <<'PY'
+          IP1="$ip1" IP2="$ip2" LOGIN_HTTP="$login_http" TOKEN_HTTP="$token_http" GRAPH_HTTP="$graph_http" \
+            SELECTED_PROXY_SAFE_PATH="$GITHUB_WORKSPACE/.mihomo-ga/selected_proxy.safe.json" \
+            "$VENV_PYTHON" - <<'PY'
           import hashlib, json, os
+          from pathlib import Path
 
           mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
           ip1 = os.environ.get("IP1", "").strip()
@@ -572,6 +575,16 @@ jobs:
               proxy_profile != "known_success"
               or (known_reference_present and sha16 == expected_known_sha16)
           )
+          selected_name_sha12 = None
+          selected_safe_path = os.environ.get("SELECTED_PROXY_SAFE_PATH", "").strip()
+          if mode == "proxy_pool" and selected_safe_path:
+              try:
+                  selected_safe = json.loads(Path(selected_safe_path).read_text(encoding="utf-8"))
+                  candidate_hash = str(selected_safe.get("selected_name_sha12") or "")
+                  if len(candidate_hash) == 12:
+                      selected_name_sha12 = candidate_hash
+              except Exception:
+                  pass
           admitted = stable and not denied and transport_ok and known_egress_match
           if ip1.count(".") == 3:
               parts = ip1.split(".")
@@ -600,6 +613,7 @@ jobs:
               "admitted": admitted,
               "egress_sha16": sha16,
               "egress_prefix": prefix,
+              "selected_name_sha12": selected_name_sha12,
               "login_http": login_http,
               "token_http": token_http,
               "graph_http": graph_http,
@@ -609,10 +623,12 @@ jobs:
           with open(path, "w", encoding="utf-8") as fh:
               json.dump(safe, fh, ensure_ascii=False, indent=2)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              for key in ("admitted", "egress_sha16", "egress_prefix", "reason"):
+              for key in ("admitted", "egress_sha16", "egress_prefix", "selected_name_sha12", "reason"):
                   value = safe[key]
                   if isinstance(value, bool):
                       value = str(value).lower()
+                  elif value is None:
+                      value = ""
                   fh.write(f"{key}={value}\n")
           print(json.dumps(safe, ensure_ascii=False))
           PY
@@ -915,6 +931,7 @@ jobs:
           EGRESS_ADMITTED: ${{ steps.egress.outputs.admitted }}
           EGRESS_SHA16: ${{ steps.egress.outputs.egress_sha16 }}
           EGRESS_PREFIX: ${{ steps.egress.outputs.egress_prefix }}
+          SELECTED_NAME_SHA12: ${{ steps.egress.outputs.selected_name_sha12 }}
           EGRESS_REASON: ${{ steps.egress.outputs.reason }}
           LEASE_SAFE: ${{ steps.acquire.outputs.safe }}
           RUNTIME_SAFE: ${{ steps.recovery.outputs.safe_status }}
@@ -963,6 +980,7 @@ jobs:
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
               "egress_prefix": os.environ.get("EGRESS_PREFIX") or None,
+              "selected_name_sha12": os.environ.get("SELECTED_NAME_SHA12") or None,
               "egress_reason": os.environ.get("EGRESS_REASON") or None,
               "leased": bool(lease.get("leased")),
               "account_id": int(lease.get("account_id") or 0) or None,
