@@ -19,6 +19,14 @@ on:
         description: "Bounded fresh-runner slots; use [1] normally or [1..20] for a batch"
         required: true
         default: "[1]"
+      recovery_network_mode:
+        description: "Microsoft transport: direct GA runner egress or isolated curated proxy pool"
+        required: true
+        default: "ga_own_ip"
+      proxy_pool_slot_offset:
+        description: "Zero-based curated proxy-pool wave offset (0-1000)"
+        required: true
+        default: "0"
       recovery_human_mode:
         description: "HumanCaptcha execution path: natural10 production control or exact5s historical recovery path"
         required: true
@@ -62,7 +70,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "8a6af0d6bc17aa3acc5135c4351b2e114be7e034"
+        default: "da4e3846460f111b8699ad14d16ec069ba22a950"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -95,6 +103,8 @@ jobs:
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
       RECOVERY_SLOT: ${{ matrix.slot }}
+      RECOVERY_NETWORK_MODE: ${{ inputs.recovery_network_mode || 'ga_own_ip' }}
+      PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
@@ -133,6 +143,12 @@ jobs:
           )
           if not valid:
               raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
+          network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
+          if network_mode not in {"ga_own_ip", "proxy_pool"}:
+              raise SystemExit("recovery_network_mode must be ga_own_ip or proxy_pool")
+          proxy_offset = int(os.environ.get("PROXY_POOL_SLOT_OFFSET", "-1"))
+          if not 0 <= proxy_offset <= 1000:
+              raise SystemExit("proxy_pool_slot_offset must be in range 0..1000")
           human_mode = os.environ.get("RECOVERY_HUMAN_MODE", "")
           if human_mode not in {"natural10", "exact5s"}:
               raise SystemExit("recovery_human_mode must be natural10 or exact5s")
@@ -174,6 +190,8 @@ jobs:
                   "natural10 force-W0 requires natural_w0_bridge=true"
               )
           print(f"recovery matrix slot={current} count={len(slots)}")
+          print(f"recovery network mode={network_mode}")
+          print(f"proxy pool slot offset={proxy_offset}")
           print(f"recovery human mode={human_mode}")
           print(f"exact5s release mode={release_mode}")
           print(f"exact5s move steps={move_steps}")
@@ -190,12 +208,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '8a6af0d6bc17aa3acc5135c4351b2e114be7e034' }}
+          ref: ${{ inputs.recovery_source_ref || 'da4e3846460f111b8699ad14d16ec069ba22a950' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
-      - name: Capture and admit fresh GA egress
-        id: egress
+      - name: Capture runner egress gate
+        id: runner_egress
         shell: bash
         env:
           EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist || '4.,13.,20.,40.,52.,68.,74.249.' }}
@@ -206,27 +224,38 @@ jobs:
           import hashlib, json, os
 
           ip = os.environ.get("IP", "").strip()
+          network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
           deny = [item.strip() for item in os.environ.get("EGRESS_PREFIX_DENYLIST", "").split(",") if item.strip()]
           present = bool(ip)
-          admitted = present and not any(ip.startswith(prefix) for prefix in deny)
+          direct_admitted = present and not any(ip.startswith(prefix) for prefix in deny)
+          prepare = network_mode == "proxy_pool" or direct_admitted
           sha16 = hashlib.sha256(ip.encode()).hexdigest()[:16] if present else "unknown"
           if ip.count(".") == 3:
               parts = ip.split(".")
               prefix = f"{parts[0]}.{parts[1]}."
           else:
               prefix = "unknown"
+          if network_mode == "proxy_pool":
+              reason = "proxy_setup_pending"
+          elif direct_admitted:
+              reason = "direct_egress_admitted"
+          elif present:
+              reason = "direct_egress_denylist"
+          else:
+              reason = "direct_egress_unavailable"
           safe = {
+              "network_mode": network_mode,
               "public_ip_present": present,
-              "admitted": admitted,
-              "egress_sha16": sha16,
-              "egress_prefix": prefix,
-              "reason": "admitted" if admitted else ("egress_denylist" if present else "egress_unavailable"),
+              "prepare": prepare,
+              "runner_egress_sha16": sha16,
+              "runner_egress_prefix": prefix,
+              "reason": reason,
           }
-          path = os.path.join(os.environ["RUNNER_TEMP"], "recovery-egress-safe.json")
+          path = os.path.join(os.environ["RUNNER_TEMP"], "runner-egress-safe.json")
           with open(path, "w", encoding="utf-8") as fh:
               json.dump(safe, fh, ensure_ascii=False, indent=2)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              for key in ("admitted", "egress_sha16", "egress_prefix", "reason"):
+              for key in ("prepare", "runner_egress_sha16", "runner_egress_prefix", "reason"):
                   value = safe[key]
                   if isinstance(value, bool):
                       value = str(value).lower()
@@ -234,14 +263,14 @@ jobs:
           print(json.dumps(safe, ensure_ascii=False))
           PY
 
-      - name: Record skipped egress
-        if: steps.egress.outputs.admitted != 'true'
+      - name: Record skipped runner egress
+        if: steps.runner_egress.outputs.prepare != 'true'
         shell: bash
         run: |
-          echo "Fresh GA egress was skipped before account selection: ${{ steps.egress.outputs.reason }}"
+          echo "Runner egress was skipped before environment setup: ${{ steps.runner_egress.outputs.reason }}"
 
       - name: Checkout admitted HumanCaptcha runtime
-        if: steps.egress.outputs.admitted == 'true'
+        if: steps.runner_egress.outputs.prepare == 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
@@ -251,7 +280,7 @@ jobs:
           persist-credentials: false
 
       - name: System dependencies
-        if: steps.egress.outputs.admitted == 'true'
+        if: steps.runner_egress.outputs.prepare == 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -269,7 +298,7 @@ jobs:
           fc-cache -f
 
       - name: Python environment
-        if: steps.egress.outputs.admitted == 'true'
+        if: steps.runner_egress.outputs.prepare == 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -286,7 +315,7 @@ jobs:
           fi
 
       - name: Install registration-compatible Windows font aliases
-        if: steps.egress.outputs.admitted == 'true'
+        if: steps.runner_egress.outputs.prepare == 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -353,6 +382,151 @@ jobs:
           PY
           fc-cache -f "$HOME/.local/share/fonts"
 
+      - name: Start isolated recovery proxy
+        if: steps.runner_egress.outputs.prepare == 'true' && env.RECOVERY_NETWORK_MODE == 'proxy_pool'
+        shell: bash
+        env:
+          PROXY_POOL_GZIP_B64: ${{ secrets.CTF_PROXY_POOL_GZIP_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "${PROXY_POOL_GZIP_B64:-}"
+          mkdir -p "$RUNNER_TEMP/service-abuse-proxy" .mihomo-ga
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import os
+          from pathlib import Path
+
+          encoded = os.environ.get("PROXY_POOL_GZIP_B64", "").strip()
+          raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+          if not raw or len(raw) > 2_000_000:
+              raise SystemExit("invalid compressed proxy pool")
+          path = Path(os.environ["RUNNER_TEMP"]) / "service-abuse-proxy" / "pool.yaml"
+          path.write_bytes(raw)
+          PY
+          proxy_node_slot=$((PROXY_POOL_SLOT_OFFSET + RECOVERY_SLOT))
+          if ! .venv/bin/python tools/setup_ga_subscription_proxy.py \
+            --config "$RUNNER_TEMP/service-abuse-proxy/pool.yaml" \
+            --node-slot "$proxy_node_slot" \
+            --out-dir .mihomo-ga \
+            --http-port 17890 \
+            --socks-port 17891 \
+            --controller-port 19090 \
+            >"$RUNNER_TEMP/service-abuse-proxy/setup.private.log" 2>&1; then
+            echo "Proxy pool setup failed before account selection" >&2
+            exit 1
+          fi
+          asset_url="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.28/mihomo-linux-amd64-v1-v1.19.28.gz"
+          curl -fsSL "$asset_url" -o .mihomo-ga/mihomo.gz
+          gzip -dc .mihomo-ga/mihomo.gz > .mihomo-ga/mihomo
+          chmod +x .mihomo-ga/mihomo
+          nohup .mihomo-ga/mihomo -d .mihomo-ga -f .mihomo-ga/config.yaml \
+            >"$RUNNER_TEMP/service-abuse-proxy/mihomo.private.log" 2>&1 &
+          echo "$!" > .mihomo-ga/mihomo.pid
+          for _ in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:19090/version >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS --max-time 2 http://127.0.0.1:19090/version >/dev/null
+          echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
+          echo "Isolated proxy process is ready for effective-egress checks"
+
+      - name: Admit effective Microsoft egress
+        id: egress
+        if: steps.runner_egress.outputs.prepare == 'true'
+        shell: bash
+        env:
+          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist || '4.,13.,20.,40.,52.,68.,74.249.' }}
+        run: |
+          set -euo pipefail
+          proxy_args=()
+          if [ "$RECOVERY_NETWORK_MODE" = "proxy_pool" ]; then
+            test -n "${OUTLOOK_PROXY_URL:-}"
+            proxy_args=(--proxy "$OUTLOOK_PROXY_URL")
+          fi
+          ip1=$(curl -fsS --max-time 15 "${proxy_args[@]}" https://api.ipify.org 2>/dev/null || true)
+          sleep 1
+          ip2=$(curl -fsS --max-time 15 "${proxy_args[@]}" https://api.ipify.org 2>/dev/null || true)
+          login_http=""
+          token_http=""
+          graph_http=""
+          if [ "$RECOVERY_NETWORK_MODE" = "proxy_pool" ]; then
+            login_http=$(curl -sS -L --max-time 20 "${proxy_args[@]}" -o /dev/null -w '%{http_code}' \
+              https://login.live.com/ 2>/dev/null || true)
+            token_http=$(curl -sS --max-time 20 "${proxy_args[@]}" -o /dev/null -w '%{http_code}' \
+              -X POST --data 'grant_type=client_credentials' \
+              https://login.microsoftonline.com/common/oauth2/v2.0/token 2>/dev/null || true)
+            graph_http=$(curl -sS --max-time 20 "${proxy_args[@]}" -o /dev/null -w '%{http_code}' \
+              'https://graph.microsoft.com/v1.0/$metadata' 2>/dev/null || true)
+          fi
+          IP1="$ip1" IP2="$ip2" LOGIN_HTTP="$login_http" TOKEN_HTTP="$token_http" GRAPH_HTTP="$graph_http" python3 - <<'PY'
+          import hashlib, json, os
+
+          mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
+          ip1 = os.environ.get("IP1", "").strip()
+          ip2 = os.environ.get("IP2", "").strip()
+          deny = [item.strip() for item in os.environ.get("EGRESS_PREFIX_DENYLIST", "").split(",") if item.strip()]
+          present = bool(ip1)
+          stable = present and ip1 == ip2
+          denied = present and any(ip1.startswith(prefix) for prefix in deny)
+          login_http = int(os.environ.get("LOGIN_HTTP") or 0) or None
+          token_http = int(os.environ.get("TOKEN_HTTP") or 0) or None
+          graph_http = int(os.environ.get("GRAPH_HTTP") or 0) or None
+          transport_ok = mode != "proxy_pool" or (
+              login_http is not None
+              and 200 <= login_http < 400
+              and token_http == 400
+              and graph_http == 200
+          )
+          admitted = stable and not denied and transport_ok
+          sha16 = hashlib.sha256(ip1.encode()).hexdigest()[:16] if present else "unknown"
+          if ip1.count(".") == 3:
+              parts = ip1.split(".")
+              prefix = f"{parts[0]}.{parts[1]}."
+          else:
+              prefix = "unknown"
+          if admitted:
+              reason = "effective_egress_admitted"
+          elif not present:
+              reason = "effective_egress_unavailable"
+          elif not stable:
+              reason = "effective_egress_unstable"
+          elif denied:
+              reason = "effective_egress_denylist"
+          else:
+              reason = "microsoft_transport_rejected"
+          safe = {
+              "network_mode": mode,
+              "public_ip_present": present,
+              "stable_egress": stable,
+              "admitted": admitted,
+              "egress_sha16": sha16,
+              "egress_prefix": prefix,
+              "login_http": login_http,
+              "token_http": token_http,
+              "graph_http": graph_http,
+              "reason": reason,
+          }
+          path = os.path.join(os.environ["RUNNER_TEMP"], "recovery-egress-safe.json")
+          with open(path, "w", encoding="utf-8") as fh:
+              json.dump(safe, fh, ensure_ascii=False, indent=2)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key in ("admitted", "egress_sha16", "egress_prefix", "reason"):
+                  value = safe[key]
+                  if isinstance(value, bool):
+                      value = str(value).lower()
+                  fh.write(f"{key}={value}\n")
+          print(json.dumps(safe, ensure_ascii=False))
+          PY
+
+      - name: Record rejected effective egress
+        if: steps.runner_egress.outputs.prepare == 'true' && steps.egress.outputs.admitted != 'true'
+        shell: bash
+        run: |
+          echo "Effective Microsoft egress was rejected before account selection: ${{ steps.egress.outputs.reason }}"
+
       - name: Materialize private control configuration
         if: steps.egress.outputs.admitted == 'true'
         id: materialize
@@ -377,6 +551,22 @@ jobs:
 
           private = Path(os.environ["RUNNER_TEMP"]) / "service-abuse-auto-private"
           browser = json.loads(private.joinpath("browser-env.json").read_text(encoding="utf-8"))
+          network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
+          if network_mode == "proxy_pool":
+              proxy = os.environ.get("OUTLOOK_PROXY_URL", "").strip()
+              if proxy != "http://127.0.0.1:17890":
+                  raise SystemExit("proxy_pool requires the isolated local proxy")
+              browser["proxy"] = proxy
+              browser["recovery_network_override"] = {
+                  "mode": "proxy_pool",
+                  "local_proxy": True,
+              }
+              private.joinpath("browser-env.json").write_text(
+                  json.dumps(browser, ensure_ascii=False, indent=2),
+                  encoding="utf-8",
+              )
+          elif browser.get("proxy"):
+              raise SystemExit("ga_own_ip requires a proxy-free browser manifest")
           cloak = browser.get("cloakbrowser") or {}
           context = browser.get("context") or {}
           args = [str(item) for item in (cloak.get("args") or [])]
@@ -476,6 +666,10 @@ jobs:
           if [ "$NATURAL_FORCE_W0_AFTER_MINUS1" = "true" ]; then
             bridge_args+=(--natural-force-w0-after-minus1)
           fi
+          proxy_args=()
+          if [ -n "${OUTLOOK_PROXY_URL:-}" ]; then
+            proxy_args+=(--network-proxy "$OUTLOOK_PROXY_URL")
+          fi
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'c634a3939fd159a3c79ac6ee394ee22922d4c24c'
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
@@ -495,6 +689,7 @@ jobs:
               --require-service-abuse-preflight \
               "${human_mode_args[@]}" \
               "${bridge_args[@]}" \
+              "${proxy_args[@]}" \
               --parent-retry-max 2 \
               --writeback-outlook-email \
               --outlook-email-config "$private/outlook-email.json" \
@@ -615,6 +810,8 @@ jobs:
               "schema": 1,
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
+              "recovery_network_mode": os.environ.get("RECOVERY_NETWORK_MODE") or None,
+              "proxy_pool_slot_offset": int(os.environ.get("PROXY_POOL_SLOT_OFFSET") or 0),
               "recovery_human_mode": os.environ.get("RECOVERY_HUMAN_MODE") or None,
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
@@ -662,6 +859,7 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ runner.temp }}/ga-auto-recovery-verdict.json
+            ${{ runner.temp }}/runner-egress-safe.json
             ${{ runner.temp }}/recovery-egress-safe.json
             ${{ steps.acquire.outputs.safe }}
             ${{ steps.recovery.outputs.safe_status }}
@@ -673,8 +871,13 @@ jobs:
         if: always()
         shell: bash
         run: |
+          if [ -f .mihomo-ga/mihomo.pid ]; then
+            kill "$(cat .mihomo-ga/mihomo.pid)" 2>/dev/null || true
+          fi
           rm -rf "$RUNNER_TEMP/service-abuse-auto-private" \
             "$RUNNER_TEMP/service-abuse-auto-profile" \
             "$RUNNER_TEMP/service-abuse-auto-semiprotocol" \
+            "$RUNNER_TEMP/service-abuse-proxy" \
             "$GITHUB_WORKSPACE/.production-human-runtime" \
+            .mihomo-ga \
             .tmp/service-abuse-diagnostics || true

@@ -28,6 +28,20 @@ repository-wide concurrency group prevents separate workflow runs from
 overlapping, while per-slot request/run ids and the server lease prevent
 duplicate account work inside a matrix batch.
 
+`recovery_network_mode` defaults to `ga_own_ip`.  The manual-only
+`proxy_pool` treatment consumes a gzip/base64 curated pool from
+`CTF_PROXY_POOL_GZIP_B64`, selects one isolated node per matrix slot, and starts
+the pinned Mihomo `v1.19.28` locally. `proxy_pool_slot_offset` defaults to `0`
+and selects later non-overlapping waves without changing matrix slot ids.
+Before account materialization or lease
+acquisition, the runner requires two identical effective public-IP samples and
+successful transport to Microsoft login, token, and Graph metadata endpoints.
+The temporary browser manifest and token/Graph client then both use
+`http://127.0.0.1:17890`; this prevents a browser-proxy/direct-Graph split.
+Public logs and artifacts retain only mode, HTTP statuses, IP prefix, and
+hashes.  Pool contents, node names, node addresses, and full IPs stay private
+and are removed by the always-run cleanup step.
+
 ## Coordinator contract
 
 The existing authenticated timestamp coordinator now also exposes:
@@ -134,10 +148,22 @@ challenge delivery retry, separate from `natural_server_challenge_rounds`:
 real result/W0/host outcomes are still consumed in order, and a fresh server
 round still requires the accepted result0 plus later host rechallenge boundary.
 `exact5s_final_xghm_target` is a separate default-off (`0`) experiment.  With a
-positive target, the complete final event envelope is aligned from the bounded
-zero-based `exact5s_final_xghm_start_index`; earlier finals stay live.  The
-current treatment uses index `1` and `272.1`, matching the only historical
-real-result0 recovery final while preserving the first live final/W0 handoff.
+positive target, every XGhm-bearing member of the final event family is aligned
+from the bounded zero-based `exact5s_final_xghm_start_index`; all other fields
+and earlier finals stay live.  The current treatment uses index `1` and
+`272.1`, matching the only historical real-result0 recovery final while
+preserving the first live final/W0 handoff.
+
+Run `29471147049` falsified XGhm as a sufficient cause.  Of 20 nominal slots,
+9 effective GA egresses leased accounts, 7 produced complete runtime evidence,
+and 2 reached the 30-minute job watchdog.  The 7 observable samples made 16
+physical holds and 10 real PX561 finals; every live backend result was `-1`.
+Four second finals explicitly recorded `forced_xghm_applied=true` and
+`XGhm=272.1`, yet all four still returned `result|-1` and their following
+synthetic-W0 host verification returned HTTP 403.  The only proven
+TierRestore recovery used a separately selected stable HK proxy, so the next
+controlled treatment changes network provenance while returning XGhm to live
+values.
 
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
@@ -190,7 +216,8 @@ registration-equivalent treatment, `ads_safe` for the recovery-shaped BFA
 treatment, or `off` for the prior live-payload control.
 Keep the defaults `[1]`, `minimal`, `natural_w0_bridge=false`, and
 `natural_force_w0_after_minus1=false` for scheduled operation;
-`natural_server_challenge_rounds` also defaults to `1`. Use a bounded value
+`natural_server_challenge_rounds` also defaults to `1`, and
+`recovery_network_mode` remains `ga_own_ip`. Use a bounded value
 such as `3` only for the W0/fresh-round treatment until it proves the complete
 TierRestore/writeback loop.
 
@@ -206,6 +233,7 @@ secret   GA_COORDINATOR_TOKEN
 secret   OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64
 secret   SERVICE_ABUSE_EXPERIMENT_KEY
 secret   SERVICE_ABUSE_BROWSER_ENV_B64
+secret   CTF_PROXY_POOL_GZIP_B64             # proxy_pool experiments only
 ```
 
 The OutlookEmail configuration contains its base URL and login password. It is
