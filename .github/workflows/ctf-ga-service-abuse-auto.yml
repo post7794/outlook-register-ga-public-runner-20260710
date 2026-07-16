@@ -27,6 +27,10 @@ on:
         description: "Exercise the verified neutral-final to W0 bridge while keeping a natural 10s hold"
         required: true
         default: "false"
+      natural_force_w0_after_minus1:
+        description: "Experimental: force synthetic W0 result0 after a live final result-1 to reach another bounded host challenge"
+        required: true
+        default: "false"
       natural_server_challenge_rounds:
         description: "Maximum fresh Microsoft HumanCaptcha rounds after accepted result|0 (1-8)"
         required: true
@@ -34,7 +38,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "d5662d02ff7948cddbbe305c3b339a7f9879dd69"
+        default: "0949e8c239980e925a5e587be7f29527b0756250"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -69,6 +73,7 @@ jobs:
       RECOVERY_SLOT: ${{ matrix.slot }}
       NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
+      NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
     steps:
       - name: Reject GitHub UI re-runs
@@ -103,12 +108,20 @@ jobs:
           bridge = os.environ.get("NATURAL_W0_BRIDGE", "")
           if bridge not in {"true", "false"}:
               raise SystemExit("natural_w0_bridge must be true or false")
+          force_minus1 = os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1", "")
+          if force_minus1 not in {"true", "false"}:
+              raise SystemExit("natural_force_w0_after_minus1 must be true or false")
           rounds = int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS", "0"))
           if not 1 <= rounds <= 8:
               raise SystemExit("natural_server_challenge_rounds must be in range 1..8")
+          if force_minus1 == "true" and (bridge != "true" or rounds < 2):
+              raise SystemExit(
+                  "natural_force_w0_after_minus1 requires natural_w0_bridge=true and at least 2 rounds"
+              )
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"natural final proof mode={mode}")
           print(f"natural W0 bridge={bridge}")
+          print(f"natural force W0 after minus1={force_minus1}")
           print(f"natural server challenge rounds={rounds}")
           PY
 
@@ -116,7 +129,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '424199030eddd62c7d7152551b115c4d8ada6db5' }}
+          ref: ${{ inputs.recovery_source_ref || '0949e8c239980e925a5e587be7f29527b0756250' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -380,8 +393,11 @@ jobs:
           if [ "$NATURAL_W0_BRIDGE" = "true" ]; then
             natural_bridge_args+=(--natural-w0-bridge)
           fi
+          if [ "$NATURAL_FORCE_W0_AFTER_MINUS1" = "true" ]; then
+            natural_bridge_args+=(--natural-force-w0-after-minus1)
+          fi
           test "$(git -C "$runtime" rev-parse HEAD)" = '875b0571d5b9c88b89a5bbc64f30488ee9565962'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'c26afdff9ea61fea2a467dfdd02c800ddf697f62'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '7515ed84d3c5c8eb5f0650eae37c87303e5fc2ca'
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/protocol_runtime_probe.py"
           cd "$runtime"
@@ -523,6 +539,7 @@ jobs:
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
+              "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",
               "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
               "runner": "ubuntu-22.04",
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",

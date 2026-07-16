@@ -65,8 +65,8 @@ It checks out the pinned private recovery-control source from
 
 The browser/controller runtime is pinned to registration production commit
 `875b0571d5b9c88b89a5bbc64f30488ee9565962`. Recovery overlays the
-`service-abuse-recovery-v1.0.0` protocol runtime blob
-`c26afdff9ea61fea2a467dfdd02c800ddf697f62`; this retains registration's
+recovery protocol runtime blob
+`7515ed84d3c5c8eb5f0650eae37c87303e5fc2ca`; this retains registration's
 natural hold implementation while restoring the recovery-specific early-W0
 pending route. Both object ids are checked before account work. Recovery uses
 the same natural hold envelope and first-hold warmup, but deliberately keeps
@@ -75,8 +75,9 @@ Microsoft parent-page Retry remains bounded at two and iframe Retry is never
 clicked. `natural_final_proof_mode=minimal` also restores the registration
 path's narrow live PX561 normalizer; `off` retains the earlier timing-only
 recovery control. `ads_safe` is the recovery-shaped treatment that preserves
-and narrowly normalizes BFA/final telemetry. None of these modes rewrites a
-collector response. The accelerated
+and narrowly normalizes BFA/final telemetry. These final-proof modes do not
+rewrite the live PX561 collector result; the separately gated W0 treatments
+can alter only the iframe-facing W0 response. The accelerated
 5s path remains available for experiments but is not
 the automatic-recovery production path because it recovered 0/6 GA fresh
 challenge slots in the latest registration validation.
@@ -96,6 +97,24 @@ When `natural_server_challenge_rounds` is above one, another hold is allowed
 only after the current round records collector `result|0` and a later real
 `risk/verify` response issues a new HumanCaptcha continuation. A `result|-1`,
 `HumanCaptcha_Failure`, or a plain visible iframe Retry never opens a round.
+
+The default strict rule above remains unchanged. A separate manual-only input,
+`natural_force_w0_after_minus1=true`, reproduces the one historical recovery
+mechanism that reached `TierRestore`: its first two live PX561 finals returned
+`result|-1`, the iframe received a synthetic W0 `result|0`, Microsoft issued a
+fresh HumanCaptcha each time, and the third live PX561 final returned
+`result|0` before `risk/verify state=continue` and `TierRestore 200`. The input
+is rejected unless `natural_w0_bridge=true` and at least two rounds are
+configured. It defaults to `false`, is not enabled by the schedule, and does
+not make a visible iframe Retry eligible.
+
+The latest GA natural run also showed why the raw round-two `PX.R3-UI`
+484-630ms values were not the deciding defect: those values were logged from
+the pre-normalization `before` packet. Because the same packets take the
+`ads_long_fallback`, the existing normalizer already emits a 1410-1520ms tail.
+The safe probe now records `ads_safe_envelope_path`, post-normalization
+`after_px`, the live backend final result, and an explicit message whenever a
+synthetic W0 result is forced after a real `result|-1`.
 
 The overlay is required by runtime evidence: the registration-only protocol
 blob fulfilled W0-before-final immediately as neutral, so only 1/6 natural W0
@@ -127,10 +146,11 @@ artifacts are named `ga-auto-recovery-safe-<run_id>-<slot>` so every slot can
 be audited independently. Set `natural_final_proof_mode=minimal` for the
 registration-equivalent treatment, `ads_safe` for the recovery-shaped BFA
 treatment, or `off` for the prior live-payload control.
-Keep the defaults `[1]`, `minimal`, and `natural_w0_bridge=false` for scheduled
-operation; `natural_server_challenge_rounds` also defaults to `1`. Use a
-bounded value such as `3` only for the W0/fresh-round treatment until it proves
-the complete TierRestore/writeback loop.
+Keep the defaults `[1]`, `minimal`, `natural_w0_bridge=false`, and
+`natural_force_w0_after_minus1=false` for scheduled operation;
+`natural_server_challenge_rounds` also defaults to `1`. Use a bounded value
+such as `3` only for the W0/fresh-round treatment until it proves the complete
+TierRestore/writeback loop.
 
 Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,
