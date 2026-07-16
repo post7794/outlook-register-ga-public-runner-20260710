@@ -165,6 +165,15 @@ TierRestore recovery used a separately selected stable HK proxy, so the next
 controlled treatment changes network provenance while returning XGhm to live
 values.
 
+The recovery subprocess also has an OS-level watchdog independent of the
+30-minute Actions job ceiling.  At 900 seconds it receives TERM, followed by
+KILL after a 15-second grace period.  Exit 124/137 is classified as
+`RECOVERY_PROCESS_WATCHDOG_TIMEOUT` only when the runtime did not already
+write a safe status, so a more specific completed result is never overwritten.
+Partial redacted probe output remains available, and the always-run completion
+step can release the lease and apply the normal retry classification instead of
+ending with `STATUS_FILE_MISSING`.
+
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
 the pre-normalization `before` packet. Because the same packets take the
