@@ -108,6 +108,16 @@ is rejected unless `natural_w0_bridge=true` and at least two rounds are
 configured. It defaults to `false`, is not enabled by the schedule, and does
 not make a visible iframe Retry eligible.
 
+`recovery_human_mode` selects the physical/protocol execution path and defaults
+to `natural10`.  The manual-only `exact5s` treatment checks out the admitted
+`00b6843` runtime, installs the historical 15s fake / 6.5s wall semiprotocol,
+and can combine it with the same bounded force-W0-after-real-`-1` bridge.  In
+this mode a live backend `result|-1` is not immediately terminal: the runner
+waits at most 15 seconds for the routed synthetic W0, then requires a later real
+Microsoft `risk/verify` response before another hold.  A plain iframe Retry is
+still terminal.  `exact5s` is accepted only with `ads_safe`, W0 bridge enabled,
+and a bounded server-round budget; scheduled operation remains `natural10`.
+
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
 the pre-normalization `before` packet. Because the same packets take the
