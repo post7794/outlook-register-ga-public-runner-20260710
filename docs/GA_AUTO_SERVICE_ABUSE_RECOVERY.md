@@ -117,6 +117,11 @@ waits at most 15 seconds for the routed synthetic W0, then requires a later real
 Microsoft `risk/verify` response before another hold.  A plain iframe Retry is
 still terminal.  `exact5s` is accepted only with `ads_safe`, W0 bridge enabled,
 and a bounded server-round budget; scheduled operation remains `natural10`.
+`exact5s_release_mode=cdp_up` preserves the locally proven input path.  The
+separate `page_up` treatment changes only the release backend: pointer down/up
+are paired through `page.mouse` while the dense in-hold movement remains raw
+CDP.  This isolates hosted-Cloak release delivery when a hold produces no final
+PX561 at all; it does not relax any result/risk/TierRestore acceptance gate.
 
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
