@@ -27,6 +27,10 @@ on:
         description: "Exact5s release backend: historical cdp_up control or paired page_up treatment"
         required: true
         default: "cdp_up"
+      exact5s_move_steps:
+        description: "Exact5s dense pressed-move count (1-24); 24 is the historical control"
+        required: true
+        default: "24"
       natural_final_proof_mode:
         description: "Natural-hold final PX561 treatment: minimal, ads_safe, or off control"
         required: true
@@ -46,7 +50,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "5f71a0c59aa27a866739a506b8e298abcc3650d8"
+        default: "fd55944b34f046c4600d1f2d5a2f6bceb0a34b52"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -82,6 +86,7 @@ jobs:
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
+      EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
       NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
@@ -119,6 +124,9 @@ jobs:
           release_mode = os.environ.get("EXACT5S_RELEASE_MODE", "")
           if release_mode not in {"cdp_up", "page_up"}:
               raise SystemExit("exact5s_release_mode must be cdp_up or page_up")
+          move_steps = int(os.environ.get("EXACT5S_MOVE_STEPS", "0"))
+          if not 1 <= move_steps <= 24:
+              raise SystemExit("exact5s_move_steps must be in range 1..24")
           mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
           if mode not in {"minimal", "ads_safe", "off"}:
               raise SystemExit("natural_final_proof_mode must be minimal, ads_safe, or off")
@@ -144,6 +152,7 @@ jobs:
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"recovery human mode={human_mode}")
           print(f"exact5s release mode={release_mode}")
+          print(f"exact5s move steps={move_steps}")
           print(f"natural final proof mode={mode}")
           print(f"natural W0 bridge={bridge}")
           print(f"natural force W0 after minus1={force_minus1}")
@@ -154,7 +163,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '5f71a0c59aa27a866739a506b8e298abcc3650d8' }}
+          ref: ${{ inputs.recovery_source_ref || 'fd55944b34f046c4600d1f2d5a2f6bceb0a34b52' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -421,6 +430,7 @@ jobs:
               --semiprotocol-out-dir "$RUNNER_TEMP/service-abuse-auto-semiprotocol"
               --semiprotocol-server-challenge-rounds "$NATURAL_SERVER_CHALLENGE_ROUNDS"
               --semiprotocol-release-mode "$EXACT5S_RELEASE_MODE"
+              --semiprotocol-move-steps "$EXACT5S_MOVE_STEPS"
             )
           else
             human_mode_args+=(
@@ -577,6 +587,7 @@ jobs:
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "recovery_human_mode": os.environ.get("RECOVERY_HUMAN_MODE") or None,
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
+              "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
               "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",

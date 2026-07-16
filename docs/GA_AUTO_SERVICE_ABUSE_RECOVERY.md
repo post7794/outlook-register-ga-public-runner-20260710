@@ -122,6 +122,12 @@ separate `page_up` treatment changes only the release backend: pointer down/up
 are paired through `page.mouse` while the dense in-hold movement remains raw
 CDP.  This isolates hosted-Cloak release delivery when a hold produces no final
 PX561 at all; it does not relax any result/risk/TierRestore acceptance gate.
+`exact5s_move_steps` is independently bounded to `1..24` and defaults to the
+historical `24`.  It exists because current hosted runners spend roughly
+0.9-1.3s synchronously dispatching 24 CDP moves, versus about 0.4s in the older
+GA success traces.  Lowering this count changes only in-hold sample density;
+the 15s fake hold, 6.5s paced wall hold, final normalization, W0 bridge, and
+host acceptance gates remain unchanged.
 
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
