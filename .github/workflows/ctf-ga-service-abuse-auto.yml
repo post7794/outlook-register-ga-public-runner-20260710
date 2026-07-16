@@ -35,6 +35,14 @@ on:
         description: "Maximum physical holds per rendered exact5s challenge (1-2)"
         required: true
         default: "1"
+      exact5s_final_xghm_target:
+        description: "Experimental final XGhm target; 0 preserves live values"
+        required: true
+        default: "0"
+      exact5s_final_xghm_start_index:
+        description: "Zero-based exact5s final index where the XGhm target begins (0-7)"
+        required: true
+        default: "1"
       natural_final_proof_mode:
         description: "Natural-hold final PX561 treatment: minimal, ads_safe, or off control"
         required: true
@@ -54,7 +62,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "013e6f6d6f29883c4220a96538f82171aaf15ded"
+        default: "8a6af0d6bc17aa3acc5135c4351b2e114be7e034"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -92,6 +100,8 @@ jobs:
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
       EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
       EXACT5S_HOLD_ATTEMPTS: ${{ inputs.exact5s_hold_attempts || '1' }}
+      EXACT5S_FINAL_XGHM_TARGET: ${{ inputs.exact5s_final_xghm_target || '0' }}
+      EXACT5S_FINAL_XGHM_START_INDEX: ${{ inputs.exact5s_final_xghm_start_index || '1' }}
       NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
@@ -135,6 +145,12 @@ jobs:
           hold_attempts = int(os.environ.get("EXACT5S_HOLD_ATTEMPTS", "0"))
           if not 1 <= hold_attempts <= 2:
               raise SystemExit("exact5s_hold_attempts must be in range 1..2")
+          xghm_target = float(os.environ.get("EXACT5S_FINAL_XGHM_TARGET", "-1"))
+          if not 0 <= xghm_target <= 1000:
+              raise SystemExit("exact5s_final_xghm_target must be in range 0..1000")
+          xghm_start = int(os.environ.get("EXACT5S_FINAL_XGHM_START_INDEX", "-1"))
+          if not 0 <= xghm_start <= 7:
+              raise SystemExit("exact5s_final_xghm_start_index must be in range 0..7")
           mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
           if mode not in {"minimal", "ads_safe", "off"}:
               raise SystemExit("natural_final_proof_mode must be minimal, ads_safe, or off")
@@ -162,6 +178,8 @@ jobs:
           print(f"exact5s release mode={release_mode}")
           print(f"exact5s move steps={move_steps}")
           print(f"exact5s hold attempts={hold_attempts}")
+          print(f"exact5s final XGhm target={xghm_target}")
+          print(f"exact5s final XGhm start index={xghm_start}")
           print(f"natural final proof mode={mode}")
           print(f"natural W0 bridge={bridge}")
           print(f"natural force W0 after minus1={force_minus1}")
@@ -172,7 +190,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '013e6f6d6f29883c4220a96538f82171aaf15ded' }}
+          ref: ${{ inputs.recovery_source_ref || '8a6af0d6bc17aa3acc5135c4351b2e114be7e034' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -441,6 +459,8 @@ jobs:
               --semiprotocol-release-mode "$EXACT5S_RELEASE_MODE"
               --semiprotocol-move-steps "$EXACT5S_MOVE_STEPS"
               --semiprotocol-hold-attempts "$EXACT5S_HOLD_ATTEMPTS"
+              --semiprotocol-final-xghm-target "$EXACT5S_FINAL_XGHM_TARGET"
+              --semiprotocol-final-xghm-start-index "$EXACT5S_FINAL_XGHM_START_INDEX"
             )
           else
             human_mode_args+=(
@@ -457,7 +477,7 @@ jobs:
             bridge_args+=(--natural-force-w0-after-minus1)
           fi
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'ed3603df86ac3a8b5ed7b3988b05c7b8ad193cd1'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'c634a3939fd159a3c79ac6ee394ee22922d4c24c'
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/protocol_runtime_probe.py"
           cd "$runtime"
@@ -599,6 +619,8 @@ jobs:
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
+              "exact5s_final_xghm_target": float(os.environ.get("EXACT5S_FINAL_XGHM_TARGET") or 0),
+              "exact5s_final_xghm_start_index": int(os.environ.get("EXACT5S_FINAL_XGHM_START_INDEX") or 1),
               "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",

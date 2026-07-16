@@ -133,6 +133,11 @@ registration wrapper only when explicitly selected.  It is a per-rendered-
 challenge delivery retry, separate from `natural_server_challenge_rounds`:
 real result/W0/host outcomes are still consumed in order, and a fresh server
 round still requires the accepted result0 plus later host rechallenge boundary.
+`exact5s_final_xghm_target` is a separate default-off (`0`) experiment.  With a
+positive target, the complete final event envelope is aligned from the bounded
+zero-based `exact5s_final_xghm_start_index`; earlier finals stay live.  The
+current treatment uses index `1` and `272.1`, matching the only historical
+real-result0 recovery final while preserving the first live final/W0 handoff.
 
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
