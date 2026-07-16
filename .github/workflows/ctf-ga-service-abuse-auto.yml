@@ -7,6 +7,14 @@ on:
         description: "Whole fresh-runner timeout"
         required: true
         default: "30"
+      runner:
+        description: "Hosted runner OS used for the recovery browser"
+        required: true
+        default: "ubuntu-22.04"
+        type: choice
+        options:
+          - ubuntu-22.04
+          - windows-2022
       lease_ttl_seconds:
         description: "Coordinator lease TTL; must cover browser recovery and writeback"
         required: true
@@ -74,7 +82,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "9f4d984aa7d7dd5ddb7e8946a1e78c28a73ee1dc"
+        default: "3adfea74fc7a5e737de621656ed813cb13a60663"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -98,7 +106,7 @@ jobs:
       max-parallel: 20
       matrix:
         slot: ${{ fromJSON(inputs.job_slots_json || '[1]') }}
-    runs-on: ubuntu-22.04
+    runs-on: ${{ inputs.runner || 'ubuntu-22.04' }}
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
     env:
       PYTHONIOENCODING: utf-8
@@ -107,6 +115,9 @@ jobs:
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
       RECOVERY_SLOT: ${{ matrix.slot }}
+      RECOVERY_RUNNER_LABEL: ${{ inputs.runner || 'ubuntu-22.04' }}
+      BOOTSTRAP_PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+      VENV_PYTHON: ${{ runner.os == 'Windows' && '.venv/Scripts/python.exe' || '.venv/bin/python' }}
       RECOVERY_NETWORK_MODE: ${{ inputs.recovery_network_mode || 'ga_own_ip' }}
       PROXY_POOL_PROFILE: ${{ inputs.proxy_pool_profile || 'unseen' }}
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
@@ -129,13 +140,19 @@ jobs:
           echo "Automatic recovery runs may not be re-run; dispatch a fresh runner instead." >&2
           exit 1
 
+      - name: Select Python on Windows
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Validate bounded recovery matrix
         shell: bash
         env:
           JOB_SLOTS_JSON: ${{ inputs.job_slots_json || '[1]' }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          "$BOOTSTRAP_PYTHON" - <<'PY'
           import json, os
           slots = json.loads(os.environ["JOB_SLOTS_JSON"])
           current = int(os.environ["RECOVERY_SLOT"])
@@ -148,6 +165,9 @@ jobs:
           )
           if not valid:
               raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
+          runner_label = os.environ.get("RECOVERY_RUNNER_LABEL", "")
+          if runner_label not in {"ubuntu-22.04", "windows-2022"}:
+              raise SystemExit("runner must be ubuntu-22.04 or windows-2022")
           network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
           if network_mode not in {"ga_own_ip", "proxy_pool"}:
               raise SystemExit("recovery_network_mode must be ga_own_ip or proxy_pool")
@@ -204,6 +224,7 @@ jobs:
                   "natural10 force-W0 requires natural_w0_bridge=true"
               )
           print(f"recovery matrix slot={current} count={len(slots)}")
+          print(f"recovery runner={runner_label}")
           print(f"recovery network mode={network_mode}")
           print(f"proxy pool profile={proxy_profile}")
           print(f"proxy pool slot offset={proxy_offset}")
@@ -223,7 +244,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '9f4d984aa7d7dd5ddb7e8946a1e78c28a73ee1dc' }}
+          ref: ${{ inputs.recovery_source_ref || '3adfea74fc7a5e737de621656ed813cb13a60663' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -235,7 +256,7 @@ jobs:
         run: |
           set -euo pipefail
           ip=$(curl -fsS --max-time 10 https://api.ipify.org || true)
-          IP="$ip" python3 - <<'PY'
+          IP="$ip" "$BOOTSTRAP_PYTHON" - <<'PY'
           import hashlib, json, os
 
           ip = os.environ.get("IP", "").strip()
@@ -295,7 +316,7 @@ jobs:
           persist-credentials: false
 
       - name: System dependencies
-        if: steps.runner_egress.outputs.prepare == 'true'
+        if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
@@ -312,8 +333,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends ttf-mscorefonts-installer || true
           fc-cache -f
 
-      - name: Python environment
-        if: steps.runner_egress.outputs.prepare == 'true'
+      - name: Python environment on Linux
+        if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
@@ -329,8 +350,26 @@ jobs:
             test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
           fi
 
+      - name: Python environment on Windows
+        if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m venv .venv
+          & .\.venv\Scripts\python.exe -m pip install --upgrade pip wheel setuptools
+          & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          $ErrorActionPreference = "Continue"
+          & .\.venv\Scripts\python.exe -m cloakbrowser install
+          $code = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          if ($code -ne 0) {
+            $found = Get-ChildItem -Path "$env:USERPROFILE\.cloakbrowser", "$env:USERPROFILE\.cache\cloakbrowser" -Filter chrome.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) { throw "cloakbrowser install failed with exit_code=$code" }
+          }
+          & .\.venv\Scripts\python.exe -m cloakbrowser info
+
       - name: Install registration-compatible Windows font aliases
-        if: steps.runner_egress.outputs.prepare == 'true'
+        if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
@@ -413,7 +452,7 @@ jobs:
           export PROXY_POOL_GZIP_B64
           test -n "${PROXY_POOL_GZIP_B64:-}"
           mkdir -p "$RUNNER_TEMP/service-abuse-proxy" .mihomo-ga
-          python3 - <<'PY'
+          "$VENV_PYTHON" - <<'PY'
           import base64
           import gzip
           import os
@@ -427,7 +466,7 @@ jobs:
           path.write_bytes(raw)
           PY
           proxy_node_slot=$((PROXY_POOL_SLOT_OFFSET + RECOVERY_SLOT))
-          if ! .venv/bin/python tools/setup_ga_subscription_proxy.py \
+          if ! "$VENV_PYTHON" tools/setup_ga_subscription_proxy.py \
             --config "$RUNNER_TEMP/service-abuse-proxy/pool.yaml" \
             --node-slot "$proxy_node_slot" \
             --out-dir .mihomo-ga \
@@ -438,11 +477,33 @@ jobs:
             echo "Proxy pool setup failed before account selection" >&2
             exit 1
           fi
-          asset_url="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.28/mihomo-linux-amd64-v1-v1.19.28.gz"
-          curl -fsSL "$asset_url" -o .mihomo-ga/mihomo.gz
-          gzip -dc .mihomo-ga/mihomo.gz > .mihomo-ga/mihomo
-          chmod +x .mihomo-ga/mihomo
-          nohup .mihomo-ga/mihomo -d .mihomo-ga -f .mihomo-ga/config.yaml \
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            asset_url="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.28/mihomo-windows-amd64-v1-v1.19.28.zip"
+            curl -fsSL "$asset_url" -o .mihomo-ga/mihomo.zip
+            "$VENV_PYTHON" - <<'PY'
+          import shutil
+          import zipfile
+          from pathlib import Path
+
+          root = Path(".mihomo-ga")
+          archive = root / "mihomo.zip"
+          extracted = root / "archive"
+          with zipfile.ZipFile(archive) as bundle:
+              bundle.extractall(extracted)
+          matches = list(extracted.rglob("mihomo*.exe"))
+          if len(matches) != 1:
+              raise SystemExit(f"expected one mihomo executable, got {len(matches)}")
+          shutil.copy2(matches[0], root / "mihomo.exe")
+          PY
+            mihomo_executable=".mihomo-ga/mihomo.exe"
+          else
+            asset_url="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.28/mihomo-linux-amd64-v1-v1.19.28.gz"
+            curl -fsSL "$asset_url" -o .mihomo-ga/mihomo.gz
+            gzip -dc .mihomo-ga/mihomo.gz > .mihomo-ga/mihomo
+            chmod +x .mihomo-ga/mihomo
+            mihomo_executable=".mihomo-ga/mihomo"
+          fi
+          nohup "$mihomo_executable" -d .mihomo-ga -f .mihomo-ga/config.yaml \
             >"$RUNNER_TEMP/service-abuse-proxy/mihomo.private.log" 2>&1 &
           echo "$!" > .mihomo-ga/mihomo.pid
           for _ in $(seq 1 20); do
@@ -484,7 +545,7 @@ jobs:
             graph_http=$(curl -sS --max-time 20 "${proxy_args[@]}" -o /dev/null -w '%{http_code}' \
               'https://graph.microsoft.com/v1.0/$metadata' 2>/dev/null || true)
           fi
-          IP1="$ip1" IP2="$ip2" LOGIN_HTTP="$login_http" TOKEN_HTTP="$token_http" GRAPH_HTTP="$graph_http" python3 - <<'PY'
+          IP1="$ip1" IP2="$ip2" LOGIN_HTTP="$login_http" TOKEN_HTTP="$token_http" GRAPH_HTTP="$graph_http" "$VENV_PYTHON" - <<'PY'
           import hashlib, json, os
 
           mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
@@ -578,13 +639,17 @@ jobs:
           test -n "${GA_COORDINATOR_TOKEN:-}"
           private="$RUNNER_TEMP/service-abuse-auto-private"
           mkdir -p "$private"
-          printf '%s' "$SERVICE_ABUSE_BROWSER_ENV_B64" | base64 --decode > "$private/browser-env.json"
-          printf '%s' "$OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64" | base64 --decode > "$private/outlook-email.json"
-          python3 - <<'PY'
-          import json, os
+          "$VENV_PYTHON" - <<'PY'
+          import base64, json, os
           from pathlib import Path
 
           private = Path(os.environ["RUNNER_TEMP"]) / "service-abuse-auto-private"
+          private.joinpath("browser-env.json").write_bytes(
+              base64.b64decode(os.environ["SERVICE_ABUSE_BROWSER_ENV_B64"], validate=True)
+          )
+          private.joinpath("outlook-email.json").write_bytes(
+              base64.b64decode(os.environ["OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64"], validate=True)
+          )
           browser = json.loads(private.joinpath("browser-env.json").read_text(encoding="utf-8"))
           network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
           if network_mode == "proxy_pool":
@@ -640,7 +705,7 @@ jobs:
           set -euo pipefail
           private='${{ steps.materialize.outputs.private_dir }}'
           safe="$RUNNER_TEMP/recovery-lease-safe.json"
-          .venv/bin/python -u tools/outlook_email_recovery_coordinator.py acquire \
+          "$VENV_PYTHON" -u tools/outlook_email_recovery_coordinator.py acquire \
             --outlook-config "$private/outlook-email.json" \
             --coordinator-url "$GA_COORDINATOR_URL" \
             --request-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RECOVERY_SLOT}" \
@@ -650,7 +715,7 @@ jobs:
             --safe-output "$safe" \
             --max-candidates "$MAX_CANDIDATES" \
             --lease-ttl-seconds "$LEASE_TTL_SECONDS"
-          SAFE="$safe" python3 - <<'PY'
+          SAFE="$safe" "$VENV_PYTHON" - <<'PY'
           import json, os
           row = json.load(open(os.environ["SAFE"], encoding="utf-8"))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
@@ -709,10 +774,22 @@ jobs:
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'c634a3939fd159a3c79ac6ee394ee22922d4c24c'
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/protocol_runtime_probe.py"
+          venv_python="$GITHUB_WORKSPACE/$VENV_PYTHON"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            recovery_prefix=("$venv_python")
+          else
+            recovery_prefix=(
+              xvfb-run -a -s '-screen 0 2560x1440x24'
+              "$venv_python"
+            )
+          fi
           cd "$runtime"
-          timeout --signal=TERM --kill-after=15s 900s \
-            xvfb-run -a -s '-screen 0 2560x1440x24' \
-            "$GITHUB_WORKSPACE/.venv/bin/python" -u tools/service_abuse_recovery.py \
+          "$venv_python" "$GITHUB_WORKSPACE/tools/run_process_watchdog.py" \
+            --timeout-seconds 900 \
+            --kill-after-seconds 15 \
+            --stdout "$log" \
+            --stderr "$err" \
+            -- "${recovery_prefix[@]}" -u tools/service_abuse_recovery.py \
               --fixture "$private/fixture.json" \
               --secret-file "$private/secret.json" \
               --output "$result" \
@@ -729,13 +806,12 @@ jobs:
               --parent-retry-max 2 \
               --writeback-outlook-email \
               --outlook-email-config "$private/outlook-email.json" \
-              --outlook-email-writeback-safe-output "$writeback_safe" \
-              >"$log" 2>"$err"
+              --outlook-email-writeback-safe-output "$writeback_safe"
           code=$?
           set -e
           if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
             if [ ! -s "$safe" ]; then
-              SAFE="$safe" python3 - <<'PY'
+              SAFE="$safe" "$venv_python" - <<'PY'
           import json, os
           from pathlib import Path
 
@@ -761,7 +837,7 @@ jobs:
           echo "safe_status=$safe" >> "$GITHUB_OUTPUT"
           echo "writeback_safe=$writeback_safe" >> "$GITHUB_OUTPUT"
           echo "probe_safe=$probe_safe" >> "$GITHUB_OUTPUT"
-          LOG="$log" OUT="$probe_safe" python3 - <<'PY' || : > "$probe_safe"
+          LOG="$log" OUT="$probe_safe" "$venv_python" - <<'PY' || : > "$probe_safe"
           import os
           import re
           from pathlib import Path
@@ -824,7 +900,7 @@ jobs:
             safe_status="$RUNNER_TEMP/recovery-runtime-safe.json"
           fi
           completion="$RUNNER_TEMP/recovery-completion-safe.json"
-          .venv/bin/python -u tools/outlook_email_recovery_coordinator.py complete \
+          "$VENV_PYTHON" -u tools/outlook_email_recovery_coordinator.py complete \
             --outlook-config "$private/outlook-email.json" \
             --coordinator-url "$GA_COORDINATOR_URL" \
             --lease-input "$private/lease.json" \
@@ -846,7 +922,7 @@ jobs:
           COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          "$VENV_PYTHON" - <<'PY'
           import json, os
           from pathlib import Path
 
@@ -883,7 +959,7 @@ jobs:
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",
               "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
-              "runner": "ubuntu-22.04",
+              "runner": os.environ.get("RECOVERY_RUNNER_LABEL") or None,
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
               "egress_prefix": os.environ.get("EGRESS_PREFIX") or None,
@@ -933,7 +1009,11 @@ jobs:
         shell: bash
         run: |
           if [ -f .mihomo-ga/mihomo.pid ]; then
-            kill "$(cat .mihomo-ga/mihomo.pid)" 2>/dev/null || true
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              powershell.exe -NoProfile -Command "Stop-Process -Id $(cat .mihomo-ga/mihomo.pid) -Force -ErrorAction SilentlyContinue" || true
+            else
+              kill "$(cat .mihomo-ga/mihomo.pid)" 2>/dev/null || true
+            fi
           fi
           rm -rf "$RUNNER_TEMP/service-abuse-auto-private" \
             "$RUNNER_TEMP/service-abuse-auto-profile" \

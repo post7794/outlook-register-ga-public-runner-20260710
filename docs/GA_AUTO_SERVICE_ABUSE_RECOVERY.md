@@ -28,6 +28,12 @@ repository-wide concurrency group prevents separate workflow runs from
 overlapping, while per-slot request/run ids and the server lease prevent
 duplicate account work inside a matrix batch.
 
+`runner` defaults to `ubuntu-22.04`, including every scheduled run.  Manual
+experiments may select `windows-2022`; that path uses native Windows fonts and
+Cloak Chromium without Xvfb, the pinned Windows Mihomo binary, and the same
+egress admission, coordinator lease, writeback, verdict, and cleanup contract.
+No other runner labels are accepted.
+
 `recovery_network_mode` defaults to `ga_own_ip`.  The manual-only
 `proxy_pool` treatment consumes a gzip/base64 curated pool from
 `CTF_PROXY_POOL_GZIP_B64`, selects one isolated node per matrix slot, and starts
@@ -190,8 +196,10 @@ controlled treatment changes network provenance while returning XGhm to live
 values.
 
 The recovery subprocess also has an OS-level watchdog independent of the
-30-minute Actions job ceiling.  At 900 seconds it receives TERM, followed by
-KILL after a 15-second grace period.  Exit 124/137 is classified as
+30-minute Actions job ceiling.  On Linux, at 900 seconds it receives TERM,
+followed by KILL after a 15-second grace period.  Windows terminates the whole
+Python/Chrome process tree at the same deadline because it has no equivalent
+reliable POSIX TERM boundary.  Exit 124/137 is classified as
 `RECOVERY_PROCESS_WATCHDOG_TIMEOUT` only when the runtime did not already
 write a safe status, so a more specific completed result is never overwritten.
 Partial redacted probe output remains available, and the always-run completion
