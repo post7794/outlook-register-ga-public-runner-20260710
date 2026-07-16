@@ -82,7 +82,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "c836a8f35c4689f3ca60e0848067d6b4dd02bb95"
+        default: "24bb4f8f33051551729cac40c5fbb5361dd36205"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -244,7 +244,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'c836a8f35c4689f3ca60e0848067d6b4dd02bb95' }}
+          ref: ${{ inputs.recovery_source_ref || '24bb4f8f33051551729cac40c5fbb5361dd36205' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -1006,19 +1006,23 @@ jobs:
 
       - name: Cleanup private recovery material
         if: always()
+        timeout-minutes: 2
         shell: bash
         run: |
-          if [ -f .mihomo-ga/mihomo.pid ]; then
-            if [ "$RUNNER_OS" = "Windows" ]; then
-              powershell.exe -NoProfile -Command "Stop-Process -Id $(cat .mihomo-ga/mihomo.pid) -Force -ErrorAction SilentlyContinue" || true
-            else
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$BOOTSTRAP_PYTHON" tools/cleanup_recovery_material.py \
+              --workspace "$GITHUB_WORKSPACE" \
+              --runner-temp "$RUNNER_TEMP" \
+              --process-timeout-seconds 15 || true
+          else
+            if [ -f .mihomo-ga/mihomo.pid ]; then
               kill "$(cat .mihomo-ga/mihomo.pid)" 2>/dev/null || true
             fi
+            rm -rf "$RUNNER_TEMP/service-abuse-auto-private" \
+              "$RUNNER_TEMP/service-abuse-auto-profile" \
+              "$RUNNER_TEMP/service-abuse-auto-semiprotocol" \
+              "$RUNNER_TEMP/service-abuse-proxy" \
+              "$GITHUB_WORKSPACE/.production-human-runtime" \
+              .mihomo-ga \
+              .tmp/service-abuse-diagnostics || true
           fi
-          rm -rf "$RUNNER_TEMP/service-abuse-auto-private" \
-            "$RUNNER_TEMP/service-abuse-auto-profile" \
-            "$RUNNER_TEMP/service-abuse-auto-semiprotocol" \
-            "$RUNNER_TEMP/service-abuse-proxy" \
-            "$GITHUB_WORKSPACE/.production-human-runtime" \
-            .mihomo-ga \
-            .tmp/service-abuse-diagnostics || true
