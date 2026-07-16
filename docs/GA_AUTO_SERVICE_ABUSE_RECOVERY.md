@@ -36,11 +36,21 @@ and selects later non-overlapping waves without changing matrix slot ids.
 Before account materialization or lease
 acquisition, the runner requires two identical effective public-IP samples and
 successful transport to Microsoft login, token, and Graph metadata endpoints.
+All three Microsoft checks use the same local proxy.  The token check is an
+intentionally credentialless POST, so either HTTP 400 or 401 is the expected
+OAuth-layer rejection; redirects, transport failures, and other statuses are
+not admitted.
 The temporary browser manifest and token/Graph client then both use
 `http://127.0.0.1:17890`; this prevents a browser-proxy/direct-Graph split.
 Public logs and artifacts retain only mode, HTTP statuses, IP prefix, and
 hashes.  Pool contents, node names, node addresses, and full IPs stay private
 and are removed by the always-run cleanup step.
+
+Run `29492836765` was a gate-only invalid trial, not a recovery result.  It
+leased zero accounts: 13/20 proxy exits were stable and 18/20 reached the three
+Microsoft probes with HTTP `200/401/200`, but the first gate required token
+HTTP 400 exactly.  The corrected gate keeps all Microsoft probes on the same
+selected proxy and accepts the observed OAuth-layer 400/401 rejection.
 
 ## Coordinator contract
 
