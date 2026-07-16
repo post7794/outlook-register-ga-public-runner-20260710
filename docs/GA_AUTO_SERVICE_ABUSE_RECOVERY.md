@@ -66,7 +66,7 @@ It checks out the pinned private recovery-control source from
 The browser/controller runtime is pinned to registration production commit
 `875b0571d5b9c88b89a5bbc64f30488ee9565962`. Recovery overlays the
 recovery protocol runtime blob
-`7515ed84d3c5c8eb5f0650eae37c87303e5fc2ca`; this retains registration's
+`6213f5a531dad34491c7860e19a7ade985a302f7`; this retains registration's
 natural hold implementation while restoring the recovery-specific early-W0
 pending route. Both object ids are checked before account work. Recovery uses
 the same natural hold envelope and first-hold warmup, but deliberately keeps
@@ -115,6 +115,17 @@ the pre-normalization `before` packet. Because the same packets take the
 The safe probe now records `ads_safe_envelope_path`, post-normalization
 `after_px`, the live backend final result, and an explicit message whenever a
 synthetic W0 result is forced after a real `result|-1`.
+
+Run `29461411836` then isolated the next state-transfer bug. Of 20 slots, 8
+egresses were admitted and all 8 obtained an account/hold. Five iframe-facing
+W0 responses carried `result|0`; two were explicitly forced after a live
+`result|-1`. One of those two received a later real Microsoft
+`risk/verify 200` HumanCaptcha continuation, but no round two started because
+Playwright's passive response listener did not observe the route-fulfilled W0
+body. The risk/verify gate had already recorded the same scoped result and
+timestamp. Fresh-round proof selection now merges both sources and chooses the
+newest terminal result, so a route-fulfilled W0 cannot be lost while stale
+results from earlier holds remain excluded.
 
 The overlay is required by runtime evidence: the registration-only protocol
 blob fulfilled W0-before-final immediately as neutral, so only 1/6 natural W0
