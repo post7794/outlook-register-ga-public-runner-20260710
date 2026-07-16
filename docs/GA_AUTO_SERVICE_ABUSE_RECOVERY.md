@@ -37,7 +37,10 @@ and selects later non-overlapping waves without changing matrix slot ids.
 `known_success` positive control reads
 `CTF_PROXY_KNOWN_SUCCESS_GZIP_B64` and is fail-closed to exactly
 `job_slots_json=[1]`, offset zero, and proxy mode, so the one previously
-TierRestore-proven egress can never be fanned out concurrently.
+TierRestore-proven node can never be fanned out concurrently. Admission also
+requires its effective egress hash to match
+`CTF_PROXY_KNOWN_SUCCESS_EGRESS_SHA16`; matching a node configuration alone
+is not treated as matching the proven network path.
 Before account materialization or lease
 acquisition, the runner requires two identical effective public-IP samples and
 successful transport to Microsoft login, token, and Graph metadata endpoints.
@@ -56,6 +59,12 @@ leased zero accounts: 13/20 proxy exits were stable and 18/20 reached the three
 Microsoft probes with HTTP `200/401/200`, but the first gate required token
 HTTP 400 exactly.  The corrected gate keeps all Microsoft probes on the same
 selected proxy and accepts the observed OAuth-layer 400/401 rejection.
+
+Run `29496089427` proved why the egress-hash gate is necessary. The
+previously successful node started correctly on GA and passed all three
+Microsoft transport probes, but its effective exit differed from the local
+TierRestore-success exit because the provider routes by ingress region. No
+account was leased, and that run is not a captcha result.
 
 ## Coordinator contract
 
@@ -259,6 +268,7 @@ secret   SERVICE_ABUSE_EXPERIMENT_KEY
 secret   SERVICE_ABUSE_BROWSER_ENV_B64
 secret   CTF_PROXY_POOL_GZIP_B64             # proxy_pool experiments only
 secret   CTF_PROXY_KNOWN_SUCCESS_GZIP_B64     # single-slot positive control
+secret   CTF_PROXY_KNOWN_SUCCESS_EGRESS_SHA16 # expected anonymized egress id
 ```
 
 The OutlookEmail configuration contains its base URL and login password. It is
