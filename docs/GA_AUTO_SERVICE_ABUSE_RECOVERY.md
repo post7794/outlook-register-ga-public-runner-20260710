@@ -33,6 +33,11 @@ duplicate account work inside a matrix batch.
 `CTF_PROXY_POOL_GZIP_B64`, selects one isolated node per matrix slot, and starts
 the pinned Mihomo `v1.19.28` locally. `proxy_pool_slot_offset` defaults to `0`
 and selects later non-overlapping waves without changing matrix slot ids.
+`proxy_pool_profile=unseen` is the normal multi-slot treatment.  The separate
+`known_success` positive control reads
+`CTF_PROXY_KNOWN_SUCCESS_GZIP_B64` and is fail-closed to exactly
+`job_slots_json=[1]`, offset zero, and proxy mode, so the one previously
+TierRestore-proven egress can never be fanned out concurrently.
 Before account materialization or lease
 acquisition, the runner requires two identical effective public-IP samples and
 successful transport to Microsoft login, token, and Graph metadata endpoints.
@@ -253,6 +258,7 @@ secret   OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64
 secret   SERVICE_ABUSE_EXPERIMENT_KEY
 secret   SERVICE_ABUSE_BROWSER_ENV_B64
 secret   CTF_PROXY_POOL_GZIP_B64             # proxy_pool experiments only
+secret   CTF_PROXY_KNOWN_SUCCESS_GZIP_B64     # single-slot positive control
 ```
 
 The OutlookEmail configuration contains its base URL and login password. It is

@@ -23,6 +23,10 @@ on:
         description: "Microsoft transport: direct GA runner egress or isolated curated proxy pool"
         required: true
         default: "ga_own_ip"
+      proxy_pool_profile:
+        description: "Proxy evidence cohort: unseen candidates or the single previously proven recovery egress"
+        required: true
+        default: "unseen"
       proxy_pool_slot_offset:
         description: "Zero-based curated proxy-pool wave offset (0-1000)"
         required: true
@@ -70,7 +74,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "18ca0e5fdc45dfeac74d90183b1bee2c5b87d6e5"
+        default: "237173d316ad9e0e1d3a926fbc002a0ad939b213"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -104,6 +108,7 @@ jobs:
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_NETWORK_MODE: ${{ inputs.recovery_network_mode || 'ga_own_ip' }}
+      PROXY_POOL_PROFILE: ${{ inputs.proxy_pool_profile || 'unseen' }}
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
@@ -146,9 +151,18 @@ jobs:
           network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
           if network_mode not in {"ga_own_ip", "proxy_pool"}:
               raise SystemExit("recovery_network_mode must be ga_own_ip or proxy_pool")
+          proxy_profile = os.environ.get("PROXY_POOL_PROFILE", "")
+          if proxy_profile not in {"unseen", "known_success"}:
+              raise SystemExit("proxy_pool_profile must be unseen or known_success")
           proxy_offset = int(os.environ.get("PROXY_POOL_SLOT_OFFSET", "-1"))
           if not 0 <= proxy_offset <= 1000:
               raise SystemExit("proxy_pool_slot_offset must be in range 0..1000")
+          if proxy_profile == "known_success" and (
+              network_mode != "proxy_pool" or slots != [1] or proxy_offset != 0
+          ):
+              raise SystemExit(
+                  "known_success proxy profile requires proxy_pool mode, job_slots_json=[1], and offset 0"
+              )
           human_mode = os.environ.get("RECOVERY_HUMAN_MODE", "")
           if human_mode not in {"natural10", "exact5s"}:
               raise SystemExit("recovery_human_mode must be natural10 or exact5s")
@@ -191,6 +205,7 @@ jobs:
               )
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"recovery network mode={network_mode}")
+          print(f"proxy pool profile={proxy_profile}")
           print(f"proxy pool slot offset={proxy_offset}")
           print(f"recovery human mode={human_mode}")
           print(f"exact5s release mode={release_mode}")
@@ -208,7 +223,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '18ca0e5fdc45dfeac74d90183b1bee2c5b87d6e5' }}
+          ref: ${{ inputs.recovery_source_ref || '237173d316ad9e0e1d3a926fbc002a0ad939b213' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -386,9 +401,16 @@ jobs:
         if: steps.runner_egress.outputs.prepare == 'true' && env.RECOVERY_NETWORK_MODE == 'proxy_pool'
         shell: bash
         env:
-          PROXY_POOL_GZIP_B64: ${{ secrets.CTF_PROXY_POOL_GZIP_B64 }}
+          UNSEEN_PROXY_POOL_GZIP_B64: ${{ secrets.CTF_PROXY_POOL_GZIP_B64 }}
+          KNOWN_SUCCESS_PROXY_POOL_GZIP_B64: ${{ secrets.CTF_PROXY_KNOWN_SUCCESS_GZIP_B64 }}
         run: |
           set -euo pipefail
+          if [ "$PROXY_POOL_PROFILE" = "known_success" ]; then
+            PROXY_POOL_GZIP_B64="${KNOWN_SUCCESS_PROXY_POOL_GZIP_B64:-}"
+          else
+            PROXY_POOL_GZIP_B64="${UNSEEN_PROXY_POOL_GZIP_B64:-}"
+          fi
+          export PROXY_POOL_GZIP_B64
           test -n "${PROXY_POOL_GZIP_B64:-}"
           mkdir -p "$RUNNER_TEMP/service-abuse-proxy" .mihomo-ga
           python3 - <<'PY'
@@ -836,6 +858,7 @@ jobs:
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "recovery_network_mode": os.environ.get("RECOVERY_NETWORK_MODE") or None,
+              "proxy_pool_profile": os.environ.get("PROXY_POOL_PROFILE") or None,
               "proxy_pool_slot_offset": int(os.environ.get("PROXY_POOL_SLOT_OFFSET") or 0),
               "recovery_human_mode": os.environ.get("RECOVERY_HUMAN_MODE") or None,
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
