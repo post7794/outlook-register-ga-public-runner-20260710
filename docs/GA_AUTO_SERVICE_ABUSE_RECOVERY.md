@@ -128,6 +128,11 @@ historical `24`.  It exists because current hosted runners spend roughly
 GA success traces.  Lowering this count changes only in-hold sample density;
 the 15s fake hold, 6.5s paced wall hold, final normalization, W0 bridge, and
 host acceptance gates remain unchanged.
+`exact5s_hold_attempts` defaults to one and is bounded to two, matching the old
+registration wrapper only when explicitly selected.  It is a per-rendered-
+challenge delivery retry, separate from `natural_server_challenge_rounds`:
+real result/W0/host outcomes are still consumed in order, and a fresh server
+round still requires the accepted result0 plus later host rechallenge boundary.
 
 The latest GA natural run also showed why the raw round-two `PX.R3-UI`
 484-630ms values were not the deciding defect: those values were logged from
