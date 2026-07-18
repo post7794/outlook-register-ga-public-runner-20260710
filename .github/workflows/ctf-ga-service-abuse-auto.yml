@@ -928,6 +928,10 @@ jobs:
         if: always()
         shell: bash
         env:
+          RUNNER_EGRESS_PREPARE: ${{ steps.runner_egress.outputs.prepare }}
+          RUNNER_EGRESS_SHA16: ${{ steps.runner_egress.outputs.runner_egress_sha16 }}
+          RUNNER_EGRESS_PREFIX: ${{ steps.runner_egress.outputs.runner_egress_prefix }}
+          RUNNER_EGRESS_REASON: ${{ steps.runner_egress.outputs.reason }}
           EGRESS_ADMITTED: ${{ steps.egress.outputs.admitted }}
           EGRESS_SHA16: ${{ steps.egress.outputs.egress_sha16 }}
           EGRESS_PREFIX: ${{ steps.egress.outputs.egress_prefix }}
@@ -939,7 +943,11 @@ jobs:
           COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
         run: |
           set -euo pipefail
-          "$VENV_PYTHON" - <<'PY'
+          verdict_python="$VENV_PYTHON"
+          if [ ! -x "$verdict_python" ]; then
+            verdict_python="$BOOTSTRAP_PYTHON"
+          fi
+          "$verdict_python" - <<'PY'
           import json, os
           from pathlib import Path
 
@@ -977,6 +985,10 @@ jobs:
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",
               "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
               "runner": os.environ.get("RECOVERY_RUNNER_LABEL") or None,
+              "runner_egress_prepare": os.environ.get("RUNNER_EGRESS_PREPARE") == "true",
+              "runner_egress_sha16": os.environ.get("RUNNER_EGRESS_SHA16") or None,
+              "runner_egress_prefix": os.environ.get("RUNNER_EGRESS_PREFIX") or None,
+              "runner_egress_reason": os.environ.get("RUNNER_EGRESS_REASON") or None,
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
               "egress_prefix": os.environ.get("EGRESS_PREFIX") or None,
