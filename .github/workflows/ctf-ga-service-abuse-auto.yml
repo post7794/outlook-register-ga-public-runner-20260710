@@ -47,6 +47,10 @@ on:
         description: "Use the byte-exact protocol runtime from the two verified local TierRestore recoveries"
         required: true
         default: "false"
+      registration_natural_overlay:
+        description: "Use the byte-exact 875b057 thin-natural registration protocol"
+        required: true
+        default: "false"
       exact5s_release_mode:
         description: "Exact5s release backend: historical cdp_up control or paired page_up treatment"
         required: true
@@ -68,7 +72,7 @@ on:
         required: true
         default: "1"
       natural_final_proof_mode:
-        description: "Natural-hold final PX561 treatment: minimal, ads_safe, or off control"
+        description: "Natural-hold final PX561 treatment: minimal_natural_hold, minimal, ads_safe, or off"
         required: true
         default: "minimal"
       natural_w0_bridge:
@@ -127,6 +131,7 @@ jobs:
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
       HISTORICAL_PROTOCOL_OVERLAY: ${{ inputs.historical_protocol_overlay || 'false' }}
+      REGISTRATION_NATURAL_OVERLAY: ${{ inputs.registration_natural_overlay || 'false' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
       EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
@@ -134,6 +139,7 @@ jobs:
       EXACT5S_FINAL_XGHM_TARGET: ${{ inputs.exact5s_final_xghm_target || '0' }}
       EXACT5S_FINAL_XGHM_START_INDEX: ${{ inputs.exact5s_final_xghm_start_index || '1' }}
       NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
+      NATURAL_HOLD_PROFILE: ${{ inputs.registration_natural_overlay == 'true' && 'registration_875b_one_shot' || 'registration_10s' }}
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
@@ -194,6 +200,11 @@ jobs:
           historical_overlay = os.environ.get("HISTORICAL_PROTOCOL_OVERLAY", "false")
           if historical_overlay not in {"true", "false"}:
               raise SystemExit("historical_protocol_overlay must be true or false")
+          registration_natural_overlay = os.environ.get(
+              "REGISTRATION_NATURAL_OVERLAY", "false"
+          )
+          if registration_natural_overlay not in {"true", "false"}:
+              raise SystemExit("registration_natural_overlay must be true or false")
           release_mode = os.environ.get("EXACT5S_RELEASE_MODE", "")
           if release_mode not in {"cdp_up", "page_up"}:
               raise SystemExit("exact5s_release_mode must be cdp_up or page_up")
@@ -210,8 +221,15 @@ jobs:
           if not 0 <= xghm_start <= 7:
               raise SystemExit("exact5s_final_xghm_start_index must be in range 0..7")
           mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
-          if mode not in {"minimal", "ads_safe", "off"}:
-              raise SystemExit("natural_final_proof_mode must be minimal, ads_safe, or off")
+          if mode not in {"minimal", "minimal_natural_hold", "ads_safe", "off"}:
+              raise SystemExit(
+                  "natural_final_proof_mode must be minimal, minimal_natural_hold, ads_safe, or off"
+              )
+          natural_hold_profile = os.environ.get("NATURAL_HOLD_PROFILE", "")
+          if natural_hold_profile not in {
+              "registration_10s", "registration_875b_one_shot"
+          }:
+              raise SystemExit("invalid natural hold profile")
           bridge = os.environ.get("NATURAL_W0_BRIDGE", "")
           if bridge not in {"true", "false"}:
               raise SystemExit("natural_w0_bridge must be true or false")
@@ -245,6 +263,36 @@ jobs:
                   "historical protocol overlay requires exact5s, cdp_up, 24 moves, "
                   "one hold, live XGhm, no newer force-W0 option, and eight server rounds"
               )
+          if registration_natural_overlay == "true" and (
+              historical_overlay != "false"
+              or human_mode != "natural10"
+              or natural_hold_profile != "registration_875b_one_shot"
+              or mode != "minimal_natural_hold"
+              or bridge != "false"
+              or force_minus1 != "false"
+              or rounds != 1
+              or release_mode != "cdp_up"
+              or move_steps != 24
+              or hold_attempts != 1
+              or xghm_target != 0
+              or xghm_start != 1
+          ):
+              raise SystemExit(
+                  "registration natural overlay requires natural10, "
+                  "minimal_natural_hold, no W0 treatments, one server round, "
+                  "and untouched exact5s controls"
+              )
+          if mode == "minimal_natural_hold" and registration_natural_overlay != "true":
+              raise SystemExit(
+                  "minimal_natural_hold requires registration_natural_overlay=true"
+              )
+          if (
+              natural_hold_profile == "registration_875b_one_shot"
+              and registration_natural_overlay != "true"
+          ):
+              raise SystemExit(
+                  "registration_875b_one_shot requires registration_natural_overlay=true"
+              )
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"recovery runner={runner_label}")
           print(f"recovery network mode={network_mode}")
@@ -252,12 +300,14 @@ jobs:
           print(f"proxy pool slot offset={proxy_offset}")
           print(f"recovery human mode={human_mode}")
           print(f"historical protocol overlay={historical_overlay}")
+          print(f"registration natural overlay={registration_natural_overlay}")
           print(f"exact5s release mode={release_mode}")
           print(f"exact5s move steps={move_steps}")
           print(f"exact5s hold attempts={hold_attempts}")
           print(f"exact5s final XGhm target={xghm_target}")
           print(f"exact5s final XGhm start index={xghm_start}")
           print(f"natural final proof mode={mode}")
+          print(f"natural hold profile={natural_hold_profile}")
           print(f"natural W0 bridge={bridge}")
           print(f"natural force W0 after minus1={force_minus1}")
           print(f"natural server challenge rounds={rounds}")
@@ -286,6 +336,25 @@ jobs:
           if actual != expected:
               raise SystemExit(f"historical protocol overlay mismatch: {actual}")
           print(f"historical protocol overlay verified sha256={actual}")
+          PY
+
+      - name: Verify registration natural protocol overlay source
+        if: env.REGISTRATION_NATURAL_OVERLAY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD:runtime_overlays/protocol_runtime_probe_875b057.py)" = \
+            '6a95bc27c418e6e759d59ef6f2061c4c20fea090'
+          "$BOOTSTRAP_PYTHON" - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          source = Path("runtime_overlays/protocol_runtime_probe_875b057.py")
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          expected = "f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6"
+          if actual != expected:
+              raise SystemExit(f"registration natural protocol overlay mismatch: {actual}")
+          print(f"registration natural protocol overlay verified sha256={actual}")
           PY
 
       - name: Capture runner egress gate
@@ -354,6 +423,23 @@ jobs:
           path: .production-human-runtime
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
+
+      - name: Verify admitted HumanCaptcha runtime
+        if: steps.runner_egress.outputs.prepare == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$GITHUB_WORKSPACE/.production-human-runtime"
+          test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
+          if [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
+            test "$HUMAN_RUNTIME_REF" = '875b0571d5b9c88b89a5bbc64f30488ee9565962'
+            test "$(git -C "$runtime" rev-parse HEAD:protocol_runtime_probe.py)" = \
+              '6a95bc27c418e6e759d59ef6f2061c4c20fea090'
+          elif [ "$HISTORICAL_PROTOCOL_OVERLAY" = "true" ]; then
+            test "$HUMAN_RUNTIME_REF" = '00b68437e041cbdcee2be209a18d7a5592f4c2dd'
+            test "$(git -C "$runtime" rev-parse HEAD:protocol_runtime_probe.py)" = \
+              'ab930a3c3b486dae9fda19b1f957cc8f989d8af6'
+          fi
 
       - name: System dependencies
         if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'
@@ -810,7 +896,7 @@ jobs:
             )
           else
             human_mode_args+=(
-              --natural-hold-profile registration_10s
+              --natural-hold-profile "$NATURAL_HOLD_PROFILE"
               --natural-final-proof-mode "$NATURAL_FINAL_PROOF_MODE"
               --natural-server-challenge-rounds "$NATURAL_SERVER_CHALLENGE_ROUNDS"
             )
@@ -835,6 +921,12 @@ jobs:
               'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
               "$protocol_source")
             test "$actual_protocol_sha256" = '3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4'
+          elif [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
+            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_875b057.py"
+            actual_protocol_sha256=$("$GITHUB_WORKSPACE/$VENV_PYTHON" -c \
+              'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+              "$protocol_source")
+            test "$actual_protocol_sha256" = 'f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6'
           fi
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
@@ -1029,12 +1121,25 @@ jobs:
                   if os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true"
                   else None
               ),
+              "registration_natural_overlay": os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true",
+              "registration_natural_protocol_sha256": (
+                  "f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6"
+                  if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
+                  else None
+              ),
+              "registration_natural_one_shot": (
+                  True if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true" else None
+              ),
+              "registration_retry_budget_equivalent": (
+                  False if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true" else None
+              ),
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
               "exact5s_final_xghm_target": float(os.environ.get("EXACT5S_FINAL_XGHM_TARGET") or 0),
               "exact5s_final_xghm_start_index": int(os.environ.get("EXACT5S_FINAL_XGHM_START_INDEX") or 1),
               "natural_final_proof_mode": os.environ.get("NATURAL_FINAL_PROOF_MODE") or None,
+              "natural_hold_profile": os.environ.get("NATURAL_HOLD_PROFILE") or None,
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",
               "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
