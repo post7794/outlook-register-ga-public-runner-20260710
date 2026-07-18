@@ -43,6 +43,10 @@ on:
         description: "HumanCaptcha execution path: natural10 production control or exact5s historical recovery path"
         required: true
         default: "natural10"
+      historical_protocol_overlay:
+        description: "Use the byte-exact protocol runtime from the two verified local TierRestore recoveries"
+        required: true
+        default: "false"
       exact5s_release_mode:
         description: "Exact5s release backend: historical cdp_up control or paired page_up treatment"
         required: true
@@ -122,6 +126,7 @@ jobs:
       PROXY_POOL_PROFILE: ${{ inputs.proxy_pool_profile || 'unseen' }}
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
+      HISTORICAL_PROTOCOL_OVERLAY: ${{ inputs.historical_protocol_overlay || 'false' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
       EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
@@ -186,6 +191,9 @@ jobs:
           human_mode = os.environ.get("RECOVERY_HUMAN_MODE", "")
           if human_mode not in {"natural10", "exact5s"}:
               raise SystemExit("recovery_human_mode must be natural10 or exact5s")
+          historical_overlay = os.environ.get("HISTORICAL_PROTOCOL_OVERLAY", "false")
+          if historical_overlay not in {"true", "false"}:
+              raise SystemExit("historical_protocol_overlay must be true or false")
           release_mode = os.environ.get("EXACT5S_RELEASE_MODE", "")
           if release_mode not in {"cdp_up", "page_up"}:
               raise SystemExit("exact5s_release_mode must be cdp_up or page_up")
@@ -223,12 +231,27 @@ jobs:
               raise SystemExit(
                   "natural10 force-W0 requires natural_w0_bridge=true"
               )
+          if historical_overlay == "true" and (
+              human_mode != "exact5s"
+              or release_mode != "cdp_up"
+              or move_steps != 24
+              or hold_attempts != 1
+              or xghm_target != 0
+              or xghm_start != 1
+              or force_minus1 != "false"
+              or rounds != 8
+          ):
+              raise SystemExit(
+                  "historical protocol overlay requires exact5s, cdp_up, 24 moves, "
+                  "one hold, live XGhm, no newer force-W0 option, and eight server rounds"
+              )
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"recovery runner={runner_label}")
           print(f"recovery network mode={network_mode}")
           print(f"proxy pool profile={proxy_profile}")
           print(f"proxy pool slot offset={proxy_offset}")
           print(f"recovery human mode={human_mode}")
+          print(f"historical protocol overlay={historical_overlay}")
           print(f"exact5s release mode={release_mode}")
           print(f"exact5s move steps={move_steps}")
           print(f"exact5s hold attempts={hold_attempts}")
@@ -247,6 +270,23 @@ jobs:
           ref: ${{ inputs.recovery_source_ref || '3e500ac0d6c444bfdffc5e6e900ea59b2278ed3d' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
+
+      - name: Verify historical protocol overlay source
+        if: env.HISTORICAL_PROTOCOL_OVERLAY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$BOOTSTRAP_PYTHON" - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          source = Path("runtime_overlays/protocol_runtime_probe_00b6843.py")
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          expected = "3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4"
+          if actual != expected:
+              raise SystemExit(f"historical protocol overlay mismatch: {actual}")
+          print(f"historical protocol overlay verified sha256={actual}")
+          PY
 
       - name: Capture runner egress gate
         id: runner_egress
@@ -788,8 +828,16 @@ jobs:
           fi
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'c634a3939fd159a3c79ac6ee394ee22922d4c24c'
+          protocol_source="$GITHUB_WORKSPACE/protocol_runtime_probe.py"
+          if [ "$HISTORICAL_PROTOCOL_OVERLAY" = "true" ]; then
+            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_00b6843.py"
+            actual_protocol_sha256=$("$GITHUB_WORKSPACE/$VENV_PYTHON" -c \
+              'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+              "$protocol_source")
+            test "$actual_protocol_sha256" = '3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4'
+          fi
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
-          cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/protocol_runtime_probe.py"
+          cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
           venv_python="$GITHUB_WORKSPACE/$VENV_PYTHON"
           if [ "$RUNNER_OS" = "Windows" ]; then
             recovery_prefix=("$venv_python")
@@ -975,6 +1023,12 @@ jobs:
               "proxy_pool_profile": os.environ.get("PROXY_POOL_PROFILE") or None,
               "proxy_pool_slot_offset": int(os.environ.get("PROXY_POOL_SLOT_OFFSET") or 0),
               "recovery_human_mode": os.environ.get("RECOVERY_HUMAN_MODE") or None,
+              "historical_protocol_overlay": os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true",
+              "historical_protocol_sha256": (
+                  "3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4"
+                  if os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true"
+                  else None
+              ),
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
