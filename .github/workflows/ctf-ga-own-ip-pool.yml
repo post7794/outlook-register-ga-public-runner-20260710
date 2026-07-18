@@ -63,18 +63,6 @@ on:
           - paired_thin_then_5s
           - natural_legacy
           - ui_natural
-      sunbrowser_region:
-        description: "SunBrowser fingerprint region; must match the selected proxy/runner exit"
-        required: true
-        default: "us"
-        type: choice
-        options:
-          - hk
-          - sg
-          - jp
-          - us
-          - gb
-          - de
       runner:
         description: "Ubuntu runner label for the GA egress pool"
         required: true
@@ -563,9 +551,14 @@ jobs:
         if: ${{ steps.egress.outputs.should_probe != 'false' && inputs.variant == 'semiprotocol_5s_sunbrowser' }}
         shell: bash
         env:
-          SUNBROWSER_REGION_INPUT: ${{ inputs.sunbrowser_region }}
+          NETWORK_MODE_INPUT: ${{ inputs.network_mode }}
         run: |
           set -euxo pipefail
+          if [ "$NETWORK_MODE_INPUT" != "ga_own_ip" ]; then
+            echo "SunBrowser public-runner v1 requires network_mode=ga_own_ip so region can fail closed to us" >&2
+            exit 2
+          fi
+          SUNBROWSER_REGION_INPUT=us
           asset="SunBrowser-LocalFP-Linux-x64-20260718.tar.gz"
           expected="d1f881602e4e07c873154f3acd745b8772739c5f7469721c39eef0741b96235a"
           url="https://github.com/post7794/outlook-register-ga-public-runner-20260710/releases/download/sunbrowser-localfp-20260718/$asset"
