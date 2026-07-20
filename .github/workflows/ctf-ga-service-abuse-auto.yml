@@ -98,7 +98,7 @@ on:
       recovery_source_ref:
         description: "Immutable private recovery-control source commit"
         required: true
-        default: "fe3d5db351a87873cddd9b72ef3807561e40849b"
+      default: "93988777add05bc9b4764488afddbb1d1aabd1a5"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -127,7 +127,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
-      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'fe3d5db351a87873cddd9b72ef3807561e40849b' }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || '93988777add05bc9b4764488afddbb1d1aabd1a5' }}
       PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
@@ -357,7 +357,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'fe3d5db351a87873cddd9b72ef3807561e40849b' }}
+          ref: ${{ inputs.recovery_source_ref || '93988777add05bc9b4764488afddbb1d1aabd1a5' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -366,7 +366,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$PRIVATE_SOURCE_SHA" = "fe3d5db351a87873cddd9b72ef3807561e40849b"
+          test "$PRIVATE_SOURCE_SHA" = "93988777add05bc9b4764488afddbb1d1aabd1a5"
           test "$actual" = "$PRIVATE_SOURCE_SHA"
           echo "private_source_commit=$actual"
           echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
@@ -1369,13 +1369,21 @@ jobs:
             safe_status="$RUNNER_TEMP/recovery-runtime-safe.json"
           fi
           completion="$RUNNER_TEMP/recovery-completion-safe.json"
+          set +e
           "$VENV_PYTHON" -u tools/outlook_email_recovery_coordinator.py complete \
             --outlook-config "$private/outlook-email.json" \
             --coordinator-url "$GA_COORDINATOR_URL" \
             --lease-input "$private/lease.json" \
             --safe-status "$safe_status" \
             --safe-output "$completion"
+          code=$?
+          set -e
           echo "safe=$completion" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ]; then
+            echo "recovery lease completion failed after cleanup attempt (exit=$code)" >&2
+            exit "$code"
+          fi
 
       - name: Build redacted automatic-recovery verdict
         if: always()
