@@ -1,4 +1,4 @@
-name: CTF GA automatic service-abuse recovery (public runner)
+name: CTF GA public-runner private-source Camoufox recovery
 
 on:
   workflow_dispatch:
@@ -6,15 +6,23 @@ on:
       timeout_minutes:
         description: "Whole fresh-runner timeout"
         required: true
-        default: "30"
+        default: "40"
       runner:
         description: "Hosted runner OS used for the recovery browser"
         required: true
-        default: "ubuntu-22.04"
+        default: "windows-2022"
         type: choice
         options:
           - ubuntu-22.04
           - windows-2022
+      recovery_browser_engine:
+        description: "Recovery browser: Camoufox Firefox control or legacy Cloak Chromium"
+        required: true
+        default: "camoufox"
+        type: choice
+        options:
+          - camoufox
+          - cloak
       lease_ttl_seconds:
         description: "Coordinator lease TTL; must cover browser recovery and writeback"
         required: true
@@ -30,7 +38,7 @@ on:
       recovery_network_mode:
         description: "Microsoft transport: direct GA runner egress or isolated curated proxy pool"
         required: true
-        default: "ga_own_ip"
+        default: "proxy_pool"
       proxy_pool_profile:
         description: "Proxy evidence cohort: unseen candidates or the single previously proven recovery egress"
         required: true
@@ -42,11 +50,11 @@ on:
       recovery_human_mode:
         description: "HumanCaptcha execution path: natural10 production control or exact5s historical recovery path"
         required: true
-        default: "natural10"
+        default: "exact5s"
       historical_protocol_overlay:
         description: "Use the byte-exact protocol runtime from the two verified local TierRestore recoveries"
         required: true
-        default: "false"
+        default: "true"
       registration_natural_overlay:
         description: "Use the byte-exact 875b057 thin-natural registration protocol"
         required: true
@@ -72,13 +80,13 @@ on:
         required: true
         default: "1"
       natural_final_proof_mode:
-        description: "Natural-hold final PX561 treatment: minimal_natural_hold, minimal, ads_safe, or off"
+        description: "Natural-hold final PX561 treatment: minimal, ads_safe, or off control"
         required: true
-        default: "minimal"
+        default: "ads_safe"
       natural_w0_bridge:
         description: "Exercise the verified neutral-final to W0 bridge while keeping a natural 10s hold"
         required: true
-        default: "false"
+        default: "true"
       natural_force_w0_after_minus1:
         description: "Experimental: force synthetic W0 result0 after a live final result-1 to reach another bounded host challenge"
         required: true
@@ -86,20 +94,17 @@ on:
       natural_server_challenge_rounds:
         description: "Maximum fresh Microsoft HumanCaptcha rounds after accepted result|0 (1-8)"
         required: true
-        default: "1"
+        default: "8"
       recovery_source_ref:
-        description: "Pinned private recovery-control source commit"
+        description: "Immutable private recovery-control source commit"
         required: true
-        default: "dbbcff11270caea3f129f4b2b0d2d239cc0f77ec"
+        default: "fe3d5db351a87873cddd9b72ef3807561e40849b"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
         default: "4.,13.,20.,40.,52.,68.,74.249."
-  schedule:
-    - cron: "7,22,37,52 * * * *"
-
 concurrency:
-  group: service-abuse-auto-recovery
+  group: public-runner-private-source-camoufox-recovery
   cancel-in-progress: false
 
 permissions:
@@ -108,13 +113,13 @@ permissions:
 jobs:
   recover:
     name: recover (${{ matrix.slot }})
-    if: github.event_name == 'workflow_dispatch' || vars.SERVICE_ABUSE_AUTO_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       max-parallel: 20
       matrix:
         slot: ${{ fromJSON(inputs.job_slots_json || '[1]') }}
-    runs-on: ${{ inputs.runner || 'ubuntu-22.04' }}
+    runs-on: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
     env:
       PYTHONIOENCODING: utf-8
@@ -122,27 +127,39 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'fe3d5db351a87873cddd9b72ef3807561e40849b' }}
+      PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
-      RECOVERY_RUNNER_LABEL: ${{ inputs.runner || 'ubuntu-22.04' }}
-      BOOTSTRAP_PYTHON: ${{ (inputs.runner || 'ubuntu-22.04') == 'windows-2022' && 'python' || 'python3' }}
-      VENV_PYTHON: ${{ (inputs.runner || 'ubuntu-22.04') == 'windows-2022' && '.venv/Scripts/python.exe' || '.venv/bin/python' }}
-      RECOVERY_NETWORK_MODE: ${{ inputs.recovery_network_mode || 'ga_own_ip' }}
+      RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
+      RECOVERY_BROWSER_ENGINE: ${{ github.event_name == 'schedule' && 'cloak' || inputs.recovery_browser_engine || 'camoufox' }}
+      CAMOUFOX_PACKAGE_VERSION: "0.5.4"
+      CAMOUFOX_PLAYWRIGHT_VERSION: "1.60.0"
+      CAMOUFOX_PATCHRIGHT_VERSION: "1.60.1"
+      CAMOUFOX_BROWSERFORGE_VERSION: "1.2.4"
+      CAMOUFOX_APIFY_FINGERPRINT_VERSION: "0.13.0"
+      CAMOUFOX_BROWSER_VERSION: "official/152.0.4-beta.28"
+      CAMOUFOX_BROWSER_SPEC: "official/152.0.4-beta.28-386fc2f4"
+      CAMOUFOX_BROWSER_SHA256: "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d"
+      SEMIPROTOCOL_STOP_BEFORE_SERVER_ROUND: "4"
+      BOOTSTRAP_PYTHON: ${{ (github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022') == 'windows-2022' && 'python' || 'python3' }}
+      VENV_PYTHON: ${{ (github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022') == 'windows-2022' && '.venv/Scripts/python.exe' || '.venv/bin/python' }}
+      RECOVERY_NETWORK_MODE: ${{ github.event_name == 'schedule' && 'ga_own_ip' || inputs.recovery_network_mode || 'proxy_pool' }}
       PROXY_POOL_PROFILE: ${{ inputs.proxy_pool_profile || 'unseen' }}
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
-      RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
-      HISTORICAL_PROTOCOL_OVERLAY: ${{ inputs.historical_protocol_overlay || 'false' }}
+      RECOVERY_HUMAN_MODE: ${{ github.event_name == 'schedule' && 'natural10' || inputs.recovery_human_mode || 'exact5s' }}
+      HISTORICAL_PROTOCOL_OVERLAY: ${{ github.event_name == 'schedule' && 'false' || inputs.historical_protocol_overlay || 'true' }}
       REGISTRATION_NATURAL_OVERLAY: ${{ inputs.registration_natural_overlay || 'false' }}
-      HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
+      HUMAN_RUNTIME_REF: ${{ (github.event_name == 'schedule' && 'natural10' || inputs.recovery_human_mode || 'exact5s') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
       EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
       EXACT5S_HOLD_ATTEMPTS: ${{ inputs.exact5s_hold_attempts || '1' }}
       EXACT5S_FINAL_XGHM_TARGET: ${{ inputs.exact5s_final_xghm_target || '0' }}
       EXACT5S_FINAL_XGHM_START_INDEX: ${{ inputs.exact5s_final_xghm_start_index || '1' }}
-      NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
+      NATURAL_FINAL_PROOF_MODE: ${{ github.event_name == 'schedule' && 'minimal' || inputs.natural_final_proof_mode || 'ads_safe' }}
       NATURAL_HOLD_PROFILE: ${{ inputs.registration_natural_overlay == 'true' && 'registration_875b_one_shot' || 'registration_10s' }}
-      NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
+      NATURAL_W0_BRIDGE: ${{ github.event_name == 'schedule' && 'false' || inputs.natural_w0_bridge || 'true' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
-      NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
+      NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ github.event_name == 'schedule' && '1' || inputs.natural_server_challenge_rounds || '8' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -179,6 +196,14 @@ jobs:
           runner_label = os.environ.get("RECOVERY_RUNNER_LABEL", "")
           if runner_label not in {"ubuntu-22.04", "windows-2022"}:
               raise SystemExit("runner must be ubuntu-22.04 or windows-2022")
+          browser_engine = os.environ.get("RECOVERY_BROWSER_ENGINE", "cloak")
+          if browser_engine not in {"cloak", "camoufox"}:
+              raise SystemExit("recovery_browser_engine must be cloak or camoufox")
+          stop_before_round = int(
+              os.environ.get("SEMIPROTOCOL_STOP_BEFORE_SERVER_ROUND", "4")
+          )
+          if stop_before_round != 4:
+              raise SystemExit("semiprotocol stop-loss must remain fixed at round 4")
           network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
           if network_mode not in {"ga_own_ip", "proxy_pool"}:
               raise SystemExit("recovery_network_mode must be ga_own_ip or proxy_pool")
@@ -223,9 +248,12 @@ jobs:
           mode = os.environ.get("NATURAL_FINAL_PROOF_MODE", "")
           if mode not in {"minimal", "minimal_natural_hold", "ads_safe", "off"}:
               raise SystemExit(
-                  "natural_final_proof_mode must be minimal, minimal_natural_hold, ads_safe, or off"
+                  "natural_final_proof_mode must be minimal, minimal_natural_hold, "
+                  "ads_safe, or off"
               )
-          natural_hold_profile = os.environ.get("NATURAL_HOLD_PROFILE", "")
+          natural_hold_profile = os.environ.get(
+              "NATURAL_HOLD_PROFILE", "registration_10s"
+          )
           if natural_hold_profile not in {
               "registration_10s", "registration_875b_one_shot"
           }:
@@ -263,6 +291,17 @@ jobs:
                   "historical protocol overlay requires exact5s, cdp_up, 24 moves, "
                   "one hold, live XGhm, no newer force-W0 option, and eight server rounds"
               )
+          if browser_engine == "camoufox" and (
+              runner_label != "windows-2022"
+              or network_mode != "proxy_pool"
+              or slots != [1]
+              or human_mode != "exact5s"
+              or historical_overlay != "true"
+          ):
+              raise SystemExit(
+                  "initial Camoufox rollout requires windows-2022, proxy_pool, "
+                  "one slot, and the exact5s historical protocol overlay"
+              )
           if registration_natural_overlay == "true" and (
               historical_overlay != "false"
               or human_mode != "natural10"
@@ -295,6 +334,7 @@ jobs:
               )
           print(f"recovery matrix slot={current} count={len(slots)}")
           print(f"recovery runner={runner_label}")
+          print(f"recovery browser engine={browser_engine}")
           print(f"recovery network mode={network_mode}")
           print(f"proxy pool profile={proxy_profile}")
           print(f"proxy pool slot offset={proxy_offset}")
@@ -311,15 +351,26 @@ jobs:
           print(f"natural W0 bridge={bridge}")
           print(f"natural force W0 after minus1={force_minus1}")
           print(f"natural server challenge rounds={rounds}")
+          print(f"semiprotocol stop before server round={stop_before_round}")
           PY
 
-      - name: Checkout private recovery control plane
+      - name: Checkout pinned private recovery control plane
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'dbbcff11270caea3f129f4b2b0d2d239cc0f77ec' }}
+          ref: ${{ inputs.recovery_source_ref || 'fe3d5db351a87873cddd9b72ef3807561e40849b' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
+
+      - name: Verify pinned private source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$PRIVATE_SOURCE_SHA" = "fe3d5db351a87873cddd9b72ef3807561e40849b"
+          test "$actual" = "$PRIVATE_SOURCE_SHA"
+          echo "private_source_commit=$actual"
+          echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
 
       - name: Verify historical protocol overlay source
         if: env.HISTORICAL_PROTOCOL_OVERLAY == 'true'
@@ -404,6 +455,8 @@ jobs:
                   value = safe[key]
                   if isinstance(value, bool):
                       value = str(value).lower()
+                  elif value is None:
+                      value = ""
                   fh.write(f"{key}={value}\n")
           print(json.dumps(safe, ensure_ascii=False))
           PY
@@ -419,9 +472,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
-          path: .production-human-runtime
+          ref: ${{ (github.event_name == 'schedule' && 'natural10' || inputs.recovery_human_mode || 'exact5s') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+          path: .production-human-runtime
           persist-credentials: false
 
       - name: Verify admitted HumanCaptcha runtime
@@ -468,12 +521,16 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip wheel setuptools
           pip install -r requirements.txt
-          set +e
-          python -m cloakbrowser install
-          cb_code=$?
-          set -e
-          if [ "$cb_code" -ne 0 ]; then
-            test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
+            pip install -r requirements-camoufox.txt
+          else
+            set +e
+            python -m cloakbrowser install
+            cb_code=$?
+            set -e
+            if [ "$cb_code" -ne 0 ]; then
+              test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+            fi
           fi
 
       - name: Python environment on Windows
@@ -484,15 +541,29 @@ jobs:
           python -m venv .venv
           & .\.venv\Scripts\python.exe -m pip install --upgrade pip wheel setuptools
           & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-          $ErrorActionPreference = "Continue"
-          & .\.venv\Scripts\python.exe -m cloakbrowser install
-          $code = $LASTEXITCODE
-          $ErrorActionPreference = "Stop"
-          if ($code -ne 0) {
-            $found = Get-ChildItem -Path "$env:USERPROFILE\.cloakbrowser", "$env:USERPROFILE\.cache\cloakbrowser" -Filter chrome.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $found) { throw "cloakbrowser install failed with exit_code=$code" }
+          if ($env:RECOVERY_BROWSER_ENGINE -eq "camoufox") {
+            & .\.venv\Scripts\python.exe -m pip install -r requirements-camoufox.txt
+          } else {
+            $ErrorActionPreference = "Continue"
+            & .\.venv\Scripts\python.exe -m cloakbrowser install
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            if ($code -ne 0) {
+              $found = Get-ChildItem -Path "$env:USERPROFILE\.cloakbrowser", "$env:USERPROFILE\.cache\cloakbrowser" -Filter chrome.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if (-not $found) { throw "cloakbrowser install failed with exit_code=$code" }
+            }
+            & .\.venv\Scripts\python.exe -m cloakbrowser info
           }
-          & .\.venv\Scripts\python.exe -m cloakbrowser info
+
+      - name: Restore pinned Camoufox browser cache
+        if: steps.runner_egress.outputs.prepare == 'true' && env.RECOVERY_BROWSER_ENGINE == 'camoufox'
+        id: camoufox_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/camoufox
+            ~/AppData/Local/camoufox/camoufox/Cache
+          key: camoufox-${{ runner.os }}-${{ runner.arch }}-0.5.4-152.0.4-beta.28-386fc2f4
 
       - name: Install registration-compatible Windows font aliases
         if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'
@@ -753,17 +824,238 @@ jobs:
                   value = safe[key]
                   if isinstance(value, bool):
                       value = str(value).lower()
-                  elif value is None:
-                      value = ""
                   fh.write(f"{key}={value}\n")
           print(json.dumps(safe, ensure_ascii=False))
           PY
+          if [ -n "$ip1" ]; then
+            printf 'CAMOUFOX_GEOIP=%s\n' "$ip1" >> "$GITHUB_ENV"
+          fi
 
       - name: Record rejected effective egress
         if: steps.runner_egress.outputs.prepare == 'true' && steps.egress.outputs.admitted != 'true'
         shell: bash
         run: |
           echo "Effective Microsoft egress was rejected before account selection: ${{ steps.egress.outputs.reason }}"
+
+      - name: Fetch and smoke-test pinned Camoufox runtime
+        if: steps.egress.outputs.admitted == 'true' && env.RECOVERY_BROWSER_ENGINE == 'camoufox'
+        id: camoufox_runtime
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.camoufox_cache.outputs.cache-hit }}
+          EXPECTED_EGRESS_SHA16: ${{ steps.egress.outputs.egress_sha16 }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "$VENV_PYTHON" -m camoufox fetch "$CAMOUFOX_BROWSER_SPEC"
+          "$VENV_PYTHON" - <<'PY'
+          import hashlib
+          import importlib.metadata
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          import maxminddb  # noqa: F401 - proves the geoip extra is installed
+          from camoufox.addons import DefaultAddons
+          from camoufox.pkgman import camoufox_path, launch_path
+          from camoufox.sync_api import NewBrowser
+          from playwright.sync_api import sync_playwright
+
+          expected_package = os.environ["CAMOUFOX_PACKAGE_VERSION"]
+          expected_playwright = os.environ["CAMOUFOX_PLAYWRIGHT_VERSION"]
+          versions = {
+              "camoufox": importlib.metadata.version("camoufox"),
+              "playwright": importlib.metadata.version("playwright"),
+              "browserforge": importlib.metadata.version("browserforge"),
+              "apify_fingerprint_datapoints": importlib.metadata.version(
+                  "apify_fingerprint_datapoints"
+              ),
+              "patchright": importlib.metadata.version("patchright"),
+          }
+          expected_versions = {
+              "camoufox": expected_package,
+              "playwright": expected_playwright,
+              "browserforge": os.environ["CAMOUFOX_BROWSERFORGE_VERSION"],
+              "apify_fingerprint_datapoints": os.environ[
+                  "CAMOUFOX_APIFY_FINGERPRINT_VERSION"
+              ],
+              "patchright": os.environ["CAMOUFOX_PATCHRIGHT_VERSION"],
+          }
+          if versions != expected_versions:
+              raise SystemExit("Camoufox Python runtime version mismatch")
+
+          browser_dir = Path(camoufox_path(download_if_missing=False))
+          metadata = json.loads((browser_dir / "version.json").read_text(encoding="utf-8"))
+          actual_version = f"official/{metadata['version']}-{metadata['build']}"
+          if actual_version != os.environ["CAMOUFOX_BROWSER_VERSION"]:
+              raise SystemExit("Camoufox browser version mismatch")
+          if metadata.get("sha256") != os.environ["CAMOUFOX_BROWSER_SHA256"]:
+              raise SystemExit("Camoufox browser release hash mismatch")
+          executable = Path(launch_path(browser_dir)).resolve()
+          if not executable.is_file():
+              raise SystemExit("Camoufox browser executable is missing")
+
+          geoip = os.environ.get("CAMOUFOX_GEOIP", "").strip()
+          if not geoip:
+              raise SystemExit("Camoufox admitted egress IP is missing")
+          proxy_url = os.environ.get("OUTLOOK_PROXY_URL", "").strip()
+          if proxy_url != "http://127.0.0.1:17890":
+              raise SystemExit("Camoufox rollout requires the isolated proxy")
+          smoke_profile = Path(os.environ["RUNNER_TEMP"]) / "camoufox-smoke-profile"
+          try:
+              with sync_playwright() as playwright:
+                  context = NewBrowser(
+                      playwright,
+                      persistent_context=True,
+                      user_data_dir=str(smoke_profile),
+                      executable_path=str(executable),
+                      headless=False,
+                      os="windows",
+                      locale=["en-US", "en"],
+                      humanize=True,
+                      geoip=geoip,
+                      proxy={
+                          "server": proxy_url,
+                          "bypass": "localhost,127.0.0.1",
+                      },
+                      enable_cache=True,
+                      exclude_addons=[DefaultAddons.UBO],
+                  )
+                  page = context.pages[0] if context.pages else context.new_page()
+                  response = page.goto(
+                      "https://api.ipify.org",
+                      wait_until="domcontentloaded",
+                      timeout=30000,
+                  )
+                  if response is None or response.status != 200:
+                      raise SystemExit("Camoufox smoke egress probe failed")
+                  browser_ip = page.locator("body").inner_text().strip()
+                  browser_egress_sha16 = hashlib.sha256(
+                      browser_ip.encode()
+                  ).hexdigest()[:16]
+                  if browser_egress_sha16 != os.environ["EXPECTED_EGRESS_SHA16"]:
+                      raise SystemExit("Camoufox smoke egress mismatch")
+                  environment = page.evaluate(
+                      """() => ({
+                        platform: navigator.platform,
+                        language: navigator.language,
+                        languages: navigator.languages,
+                        webdriver: navigator.webdriver,
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                      })"""
+                  )
+                  context.close()
+          finally:
+              shutil.rmtree(smoke_profile, ignore_errors=True)
+          if environment.get("platform") != "Win32":
+              raise SystemExit("Camoufox smoke platform mismatch")
+          if environment.get("language") != "en-US":
+              raise SystemExit("Camoufox smoke language mismatch")
+          if environment.get("languages") != ["en-US", "en"]:
+              raise SystemExit("Camoufox smoke languages mismatch")
+          if environment.get("webdriver") is not False:
+              raise SystemExit("Camoufox smoke webdriver mismatch")
+          if not environment.get("timezone"):
+              raise SystemExit("Camoufox smoke timezone missing")
+
+          safe = {
+              "schema": 1,
+              "engine": "camoufox",
+              "versions": versions,
+              "browser_version": actual_version,
+              "browser_sha256": metadata["sha256"],
+              "executable_bound": True,
+              "runner_os": os.environ.get("RUNNER_OS"),
+              "runner_arch": os.environ.get("RUNNER_ARCH"),
+              "cache_hit": os.environ.get("CACHE_HIT") == "true",
+              "smoke_ok": True,
+              "platform": environment["platform"],
+              "language": environment["language"],
+              "languages": environment["languages"],
+              "webdriver": environment["webdriver"],
+              "timezone_present": bool(environment["timezone"]),
+              "browser_egress_match": True,
+              "configured_input_backend": "firefox_page_mouse_fallback",
+          }
+          output = Path(os.environ["RUNNER_TEMP"]) / "camoufox-runtime-safe.json"
+          output.write_text(json.dumps(safe, indent=2), encoding="utf-8")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"CAMOUFOX_EXECUTABLE_PATH={executable}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"safe={output}\n")
+          print(
+              "Camoufox runtime verified "
+              f"package={expected_package} playwright={expected_playwright} "
+              f"browser={actual_version} smoke_ok=true"
+          )
+          PY
+
+      - name: Stage verified recovery runtime
+        if: steps.egress.outputs.admitted == 'true'
+        id: runtime_stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$GITHUB_WORKSPACE/.production-human-runtime"
+          test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '20cafe830c2c9215d7bea34d16a5aaf894783442'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = 'a143a206cd28e6673f45e5f46a417069f5fc470f'
+          controller_overridden=false
+          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
+            test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '2ccc22a5948dd9b1d7cef0e58d044ac57ed6f5ec'
+            test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:requirements-camoufox.txt)" = '7d2db5dec9df33c78ac89fdbb27a553aa339424e'
+            controller_overridden=true
+          fi
+          protocol_source="$GITHUB_WORKSPACE/protocol_runtime_probe.py"
+          protocol_sha256=""
+          if [ "$HISTORICAL_PROTOCOL_OVERLAY" = "true" ]; then
+            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_00b6843.py"
+            protocol_sha256=$("$VENV_PYTHON" -c \
+              'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+              "$protocol_source")
+            test "$protocol_sha256" = '3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4'
+          elif [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
+            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_875b057.py"
+            protocol_sha256=$("$VENV_PYTHON" -c \
+              'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+              "$protocol_source")
+            test "$protocol_sha256" = 'f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6'
+          fi
+          cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
+          cp "$GITHUB_WORKSPACE/early_w0_state.py" "$runtime/early_w0_state.py"
+          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
+            cp "$GITHUB_WORKSPACE/controllers/patchright_controller.py" "$runtime/controllers/patchright_controller.py"
+          fi
+          cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
+          "$VENV_PYTHON" -m py_compile \
+            "$runtime/early_w0_state.py" \
+            "$runtime/protocol_runtime_probe.py" \
+            "$runtime/controllers/patchright_controller.py" \
+            "$runtime/tools/service_abuse_recovery.py"
+          safe="$RUNNER_TEMP/recovery-runtime-provenance.safe.json"
+          SAFE="$safe" PROTOCOL_SHA256="$protocol_sha256" "$VENV_PYTHON" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          safe = {
+              "schema": 1,
+              "control_commit": os.environ.get("PRIVATE_SOURCE_SHA"),
+              "public_runner_commit": os.environ.get("GITHUB_SHA"),
+              "public_runner_repository": os.environ.get("PUBLIC_RUNNER_REPOSITORY"),
+              "human_runtime_commit": os.environ.get("HUMAN_RUNTIME_REF"),
+              "browser_engine": os.environ.get("RECOVERY_BROWSER_ENGINE"),
+              "historical_protocol_overlay": os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true",
+              "registration_natural_overlay": os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true",
+              "protocol_sha256": os.environ.get("PROTOCOL_SHA256") or None,
+              "controller_overridden": os.environ.get("RECOVERY_BROWSER_ENGINE") == "camoufox",
+              "py_compile_ok": True,
+          }
+          Path(os.environ["SAFE"]).write_text(json.dumps(safe, indent=2), encoding="utf-8")
+          PY
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
 
       - name: Materialize private control configuration
         if: steps.egress.outputs.admitted == 'true'
@@ -794,6 +1086,7 @@ jobs:
           )
           browser = json.loads(private.joinpath("browser-env.json").read_text(encoding="utf-8"))
           network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "")
+          browser_engine = os.environ.get("RECOVERY_BROWSER_ENGINE", "cloak")
           if network_mode == "proxy_pool":
               proxy = os.environ.get("OUTLOOK_PROXY_URL", "").strip()
               if proxy != "http://127.0.0.1:17890":
@@ -803,31 +1096,64 @@ jobs:
                   "mode": "proxy_pool",
                   "local_proxy": True,
               }
-              private.joinpath("browser-env.json").write_text(
-                  json.dumps(browser, ensure_ascii=False, indent=2),
-                  encoding="utf-8",
-              )
           elif browser.get("proxy"):
               raise SystemExit("ga_own_ip requires a proxy-free browser manifest")
-          cloak = browser.get("cloakbrowser") or {}
-          context = browser.get("context") or {}
-          args = [str(item) for item in (cloak.get("args") or [])]
-          valid = (
-              sum(item.startswith("--fingerprint=") for item in args) == 1
-              and "--fingerprint-platform=windows" in args
-              and sum(item.startswith("--window-size=") for item in args) == 1
-              and "viewport" in context
-              and context["viewport"] is None
-              and bool(context.get("locale"))
-              and bool(context.get("user_agent"))
-              and bool((context.get("extra_http_headers") or {}).get("Accept-Language"))
-              and (
-                  not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
-                  or bool(browser.get("proxy"))
+          if browser_engine == "camoufox":
+              geoip = os.environ.get("CAMOUFOX_GEOIP", "").strip()
+              if not geoip:
+                  raise SystemExit("Camoufox admitted egress IP is missing")
+              executable_path = os.environ.get("CAMOUFOX_EXECUTABLE_PATH", "").strip()
+              if not executable_path or not Path(executable_path).is_file():
+                  raise SystemExit("Camoufox verified executable path is missing")
+              browser["camoufox"] = {
+                  "headless": False,
+                  "os": "windows",
+                  "locale": ["en-US", "en"],
+                  "humanize": True,
+                  "geoip": geoip,
+                  "enable_cache": True,
+                  "executable_path": executable_path,
+              }
+              browser["recovery_browser_override"] = {
+                  "engine": "camoufox",
+                  "chromium_manifest_ignored": True,
+                  "ublock_excluded": True,
+              }
+              valid = (
+                  network_mode == "proxy_pool"
+                  and browser.get("proxy") == "http://127.0.0.1:17890"
+                  and browser["camoufox"]["os"] == "windows"
+                  and browser["camoufox"]["locale"] == ["en-US", "en"]
+                  and browser["camoufox"]["headless"] is False
+                  and browser["camoufox"]["humanize"] is True
+                  and browser["camoufox"]["geoip"] == geoip
+                  and browser["camoufox"]["enable_cache"] is True
+                  and browser["camoufox"]["executable_path"] == executable_path
               )
-          )
+          else:
+              cloak = browser.get("cloakbrowser") or {}
+              context = browser.get("context") or {}
+              args = [str(item) for item in (cloak.get("args") or [])]
+              valid = (
+                  sum(item.startswith("--fingerprint=") for item in args) == 1
+                  and "--fingerprint-platform=windows" in args
+                  and sum(item.startswith("--window-size=") for item in args) == 1
+                  and "viewport" in context
+                  and context["viewport"] is None
+                  and bool(context.get("locale"))
+                  and bool(context.get("user_agent"))
+                  and bool((context.get("extra_http_headers") or {}).get("Accept-Language"))
+                  and (
+                      not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
+                      or bool(browser.get("proxy"))
+                  )
+              )
           if not valid:
               raise SystemExit("Registration environment manifest is incomplete")
+          private.joinpath("browser-env.json").write_text(
+              json.dumps(browser, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
           private.joinpath("secret.json").write_text(
               json.dumps({"secret_key": os.environ["SERVICE_ABUSE_EXPERIMENT_KEY"]}),
               encoding="utf-8",
@@ -888,6 +1214,7 @@ jobs:
               --semiprotocol-human
               --semiprotocol-out-dir "$RUNNER_TEMP/service-abuse-auto-semiprotocol"
               --semiprotocol-server-challenge-rounds "$NATURAL_SERVER_CHALLENGE_ROUNDS"
+              --semiprotocol-stop-before-server-round "$SEMIPROTOCOL_STOP_BEFORE_SERVER_ROUND"
               --semiprotocol-release-mode "$EXACT5S_RELEASE_MODE"
               --semiprotocol-move-steps "$EXACT5S_MOVE_STEPS"
               --semiprotocol-hold-attempts "$EXACT5S_HOLD_ATTEMPTS"
@@ -912,32 +1239,11 @@ jobs:
           if [ -n "${OUTLOOK_PROXY_URL:-}" ]; then
             proxy_args+=(--network-proxy "$OUTLOOK_PROXY_URL")
           fi
-          test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '19f28f47763a23fe5d16fffedc510923ea6fcce8'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '734162b26079cadffb5663a8310c34f179bf1300'
-          protocol_source="$GITHUB_WORKSPACE/protocol_runtime_probe.py"
-          if [ "$HISTORICAL_PROTOCOL_OVERLAY" = "true" ]; then
-            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_00b6843.py"
-            actual_protocol_sha256=$("$GITHUB_WORKSPACE/$VENV_PYTHON" -c \
-              'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
-              "$protocol_source")
-            test "$actual_protocol_sha256" = '3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4'
-          elif [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
-            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_875b057.py"
-            actual_protocol_sha256=$("$GITHUB_WORKSPACE/$VENV_PYTHON" -c \
-              'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
-              "$protocol_source")
-            test "$actual_protocol_sha256" = 'f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6'
+          entry_args=()
+          if [ "$RECOVERY_BROWSER_ENGINE" = "cloak" ]; then
+            entry_args+=(--entry-url 'https://outlook.live.com/mail/0/?prompt=select_account')
           fi
-          cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
-          cp "$GITHUB_WORKSPACE/early_w0_state.py" "$runtime/early_w0_state.py"
-          cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
           venv_python="$GITHUB_WORKSPACE/$VENV_PYTHON"
-          "$venv_python" -m py_compile \
-            "$runtime/early_w0_state.py" \
-            "$runtime/protocol_runtime_probe.py" \
-            "$runtime/tools/service_abuse_recovery.py"
           if [ "$RUNNER_OS" = "Windows" ]; then
             recovery_prefix=("$venv_python")
           else
@@ -958,14 +1264,15 @@ jobs:
               --output "$result" \
               --safe-status-output "$safe" \
               --profile-dir "$RUNNER_TEMP/service-abuse-auto-profile" \
+              --browser-engine "$RECOVERY_BROWSER_ENGINE" \
               --browser-config "$private/browser-env.json" \
-              --entry-url 'https://outlook.live.com/mail/0/?prompt=select_account' \
               --timeout-seconds 720 \
               --omit-email-output \
               --require-service-abuse-preflight \
               "${human_mode_args[@]}" \
               "${bridge_args[@]}" \
               "${proxy_args[@]}" \
+              "${entry_args[@]}" \
               --parent-retry-max 2 \
               --writeback-outlook-email \
               --outlook-email-config "$private/outlook-email.json" \
@@ -1075,26 +1382,24 @@ jobs:
         if: always()
         shell: bash
         env:
-          RUNNER_EGRESS_PREPARE: ${{ steps.runner_egress.outputs.prepare }}
-          RUNNER_EGRESS_SHA16: ${{ steps.runner_egress.outputs.runner_egress_sha16 }}
-          RUNNER_EGRESS_PREFIX: ${{ steps.runner_egress.outputs.runner_egress_prefix }}
-          RUNNER_EGRESS_REASON: ${{ steps.runner_egress.outputs.reason }}
           EGRESS_ADMITTED: ${{ steps.egress.outputs.admitted }}
           EGRESS_SHA16: ${{ steps.egress.outputs.egress_sha16 }}
           EGRESS_PREFIX: ${{ steps.egress.outputs.egress_prefix }}
           SELECTED_NAME_SHA12: ${{ steps.egress.outputs.selected_name_sha12 }}
           EGRESS_REASON: ${{ steps.egress.outputs.reason }}
+          RUNNER_EGRESS_PREPARE: ${{ steps.runner_egress.outputs.prepare }}
+          RUNNER_EGRESS_SHA16: ${{ steps.runner_egress.outputs.runner_egress_sha16 }}
+          RUNNER_EGRESS_PREFIX: ${{ steps.runner_egress.outputs.runner_egress_prefix }}
+          RUNNER_EGRESS_REASON: ${{ steps.runner_egress.outputs.reason }}
           LEASE_SAFE: ${{ steps.acquire.outputs.safe }}
           RUNTIME_SAFE: ${{ steps.recovery.outputs.safe_status }}
           WRITEBACK_SAFE: ${{ steps.recovery.outputs.writeback_safe }}
           COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
+          CAMOUFOX_RUNTIME_SAFE: ${{ steps.camoufox_runtime.outputs.safe }}
+          RUNTIME_STAGE_SAFE: ${{ steps.runtime_stage.outputs.safe }}
         run: |
           set -euo pipefail
-          verdict_python="$VENV_PYTHON"
-          if [ ! -x "$verdict_python" ]; then
-            verdict_python="$BOOTSTRAP_PYTHON"
-          fi
-          "$verdict_python" - <<'PY'
+          "$BOOTSTRAP_PYTHON" - <<'PY'
           import json, os
           from pathlib import Path
 
@@ -1114,14 +1419,27 @@ jobs:
           runtime = load(os.environ.get("RUNTIME_SAFE", ""))
           writeback = load(os.environ.get("WRITEBACK_SAFE", ""))
           completion = load(os.environ.get("COMPLETION_SAFE", ""))
+          camoufox_runtime = load(os.environ.get("CAMOUFOX_RUNTIME_SAFE", ""))
+          runtime_stage = load(os.environ.get("RUNTIME_STAGE_SAFE", ""))
           verdict = {
-              "schema": 1,
+              "schema": 2,
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
               "recovery_network_mode": os.environ.get("RECOVERY_NETWORK_MODE") or None,
               "proxy_pool_profile": os.environ.get("PROXY_POOL_PROFILE") or None,
               "proxy_pool_slot_offset": int(os.environ.get("PROXY_POOL_SLOT_OFFSET") or 0),
               "recovery_human_mode": os.environ.get("RECOVERY_HUMAN_MODE") or None,
+              "recovery_browser_engine": os.environ.get("RECOVERY_BROWSER_ENGINE") or None,
+              "configured_input_backend": (
+                  "firefox_page_mouse_fallback"
+                  if os.environ.get("RECOVERY_BROWSER_ENGINE") == "camoufox"
+                  else os.environ.get("EXACT5S_RELEASE_MODE") or None
+              ),
+              "semiprotocol_stop_before_server_round": int(
+                  os.environ.get("SEMIPROTOCOL_STOP_BEFORE_SERVER_ROUND") or 4
+              ),
+              "camoufox_runtime": camoufox_runtime or None,
+              "runtime_stage": runtime_stage or None,
               "historical_protocol_overlay": os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true",
               "historical_protocol_sha256": (
                   "3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4"
@@ -1151,15 +1469,27 @@ jobs:
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",
               "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
               "runner": os.environ.get("RECOVERY_RUNNER_LABEL") or None,
+              "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
+              "egress_sha16": (
+                  os.environ.get("EGRESS_SHA16")
+                  or os.environ.get("RUNNER_EGRESS_SHA16")
+                  or None
+              ),
+              "egress_prefix": (
+                  os.environ.get("EGRESS_PREFIX")
+                  or os.environ.get("RUNNER_EGRESS_PREFIX")
+                  or None
+              ),
+              "selected_name_sha12": os.environ.get("SELECTED_NAME_SHA12") or None,
+              "egress_reason": (
+                  os.environ.get("EGRESS_REASON")
+                  or os.environ.get("RUNNER_EGRESS_REASON")
+                  or None
+              ),
               "runner_egress_prepare": os.environ.get("RUNNER_EGRESS_PREPARE") == "true",
               "runner_egress_sha16": os.environ.get("RUNNER_EGRESS_SHA16") or None,
               "runner_egress_prefix": os.environ.get("RUNNER_EGRESS_PREFIX") or None,
               "runner_egress_reason": os.environ.get("RUNNER_EGRESS_REASON") or None,
-              "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
-              "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
-              "egress_prefix": os.environ.get("EGRESS_PREFIX") or None,
-              "selected_name_sha12": os.environ.get("SELECTED_NAME_SHA12") or None,
-              "egress_reason": os.environ.get("EGRESS_REASON") or None,
               "leased": bool(lease.get("leased")),
               "account_id": int(lease.get("account_id") or 0) or None,
               "attempt_number": int(lease.get("attempt_number") or 0) or None,
@@ -1194,6 +1524,8 @@ jobs:
             ${{ runner.temp }}/ga-auto-recovery-verdict.json
             ${{ runner.temp }}/runner-egress-safe.json
             ${{ runner.temp }}/recovery-egress-safe.json
+            ${{ steps.camoufox_runtime.outputs.safe }}
+            ${{ steps.runtime_stage.outputs.safe }}
             ${{ steps.acquire.outputs.safe }}
             ${{ steps.recovery.outputs.safe_status }}
             ${{ steps.recovery.outputs.writeback_safe }}
@@ -1218,6 +1550,7 @@ jobs:
               "$RUNNER_TEMP/service-abuse-auto-profile" \
               "$RUNNER_TEMP/service-abuse-auto-semiprotocol" \
               "$RUNNER_TEMP/service-abuse-proxy" \
+              "$RUNNER_TEMP/camoufox-smoke-profile" \
               "$GITHUB_WORKSPACE/.production-human-runtime" \
               .mihomo-ga \
               .tmp/service-abuse-diagnostics || true
