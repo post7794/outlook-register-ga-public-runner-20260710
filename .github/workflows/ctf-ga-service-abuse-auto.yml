@@ -294,13 +294,12 @@ jobs:
           if browser_engine == "camoufox" and (
               runner_label != "windows-2022"
               or network_mode != "proxy_pool"
-              or slots != [1]
               or human_mode != "exact5s"
               or historical_overlay != "true"
           ):
               raise SystemExit(
                   "initial Camoufox rollout requires windows-2022, proxy_pool, "
-                  "one slot, and the exact5s historical protocol overlay"
+                  "one-to-twenty unique slots, and the exact5s historical protocol overlay"
               )
           if registration_natural_overlay == "true" and (
               historical_overlay != "false"
