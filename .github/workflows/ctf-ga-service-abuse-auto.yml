@@ -98,7 +98,7 @@ on:
       recovery_source_ref:
         description: "Immutable private recovery-control source commit"
         required: true
-      default: "93988777add05bc9b4764488afddbb1d1aabd1a5"
+        default: "93988777add05bc9b4764488afddbb1d1aabd1a5"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -293,12 +293,12 @@ jobs:
               )
           if browser_engine == "camoufox" and (
               runner_label != "windows-2022"
-              or network_mode != "proxy_pool"
+              or network_mode not in {"ga_own_ip", "proxy_pool"}
               or human_mode != "exact5s"
               or historical_overlay != "true"
           ):
               raise SystemExit(
-                  "initial Camoufox rollout requires windows-2022, proxy_pool, "
+                  "Camoufox rollout requires windows-2022, ga_own_ip or proxy_pool, "
                   "one-to-twenty unique slots, and the exact5s historical protocol overlay"
               )
           if registration_natural_overlay == "true" and (
@@ -898,9 +898,21 @@ jobs:
           geoip = os.environ.get("CAMOUFOX_GEOIP", "").strip()
           if not geoip:
               raise SystemExit("Camoufox admitted egress IP is missing")
+          network_mode = os.environ.get("RECOVERY_NETWORK_MODE", "").strip()
           proxy_url = os.environ.get("OUTLOOK_PROXY_URL", "").strip()
-          if proxy_url != "http://127.0.0.1:17890":
-              raise SystemExit("Camoufox rollout requires the isolated proxy")
+          proxy_options = {}
+          if network_mode == "proxy_pool":
+              if proxy_url != "http://127.0.0.1:17890":
+                  raise SystemExit("Camoufox proxy_pool rollout requires the isolated proxy")
+              proxy_options["proxy"] = {
+                  "server": proxy_url,
+                  "bypass": "localhost,127.0.0.1",
+              }
+          elif network_mode == "ga_own_ip":
+              if proxy_url:
+                  raise SystemExit("Camoufox ga_own_ip rollout must remain proxy-free")
+          else:
+              raise SystemExit("Unsupported Camoufox recovery network mode")
           smoke_profile = Path(os.environ["RUNNER_TEMP"]) / "camoufox-smoke-profile"
           try:
               with sync_playwright() as playwright:
@@ -914,12 +926,9 @@ jobs:
                       locale=["en-US", "en"],
                       humanize=True,
                       geoip=geoip,
-                      proxy={
-                          "server": proxy_url,
-                          "bypass": "localhost,127.0.0.1",
-                      },
                       enable_cache=True,
                       exclude_addons=[DefaultAddons.UBO],
+                      **proxy_options,
                   )
                   page = context.pages[0] if context.pages else context.new_page()
                   response = page.goto(
@@ -975,6 +984,8 @@ jobs:
               "webdriver": environment["webdriver"],
               "timezone_present": bool(environment["timezone"]),
               "browser_egress_match": True,
+              "network_mode": network_mode,
+              "proxy_configured": bool(proxy_options),
               "configured_input_backend": "firefox_page_mouse_fallback",
           }
           output = Path(os.environ["RUNNER_TEMP"]) / "camoufox-runtime-safe.json"
@@ -1118,9 +1129,15 @@ jobs:
                   "chromium_manifest_ignored": True,
                   "ublock_excluded": True,
               }
-              valid = (
+              network_valid = (
                   network_mode == "proxy_pool"
                   and browser.get("proxy") == "http://127.0.0.1:17890"
+              ) or (
+                  network_mode == "ga_own_ip"
+                  and not browser.get("proxy")
+              )
+              valid = (
+                  network_valid
                   and browser["camoufox"]["os"] == "windows"
                   and browser["camoufox"]["locale"] == ["en-US", "en"]
                   and browser["camoufox"]["headless"] is False
