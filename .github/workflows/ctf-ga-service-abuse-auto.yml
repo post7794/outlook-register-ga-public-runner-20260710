@@ -84,6 +84,7 @@ on:
           - control
           - move8
           - page_up
+          - page_moves24
       exact5s_hold_attempts:
         description: "Maximum physical holds per rendered exact5s challenge (1-2)"
         required: true
@@ -115,7 +116,7 @@ on:
       recovery_source_ref:
         description: "Immutable private recovery-control source commit"
         required: true
-        default: "9378bcb23758dc2cb0db9fe36993a0d22333baf7"
+        default: "318d7c928dba35aa65f675a35a3ff971b69f1fcc"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -144,7 +145,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
-      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || '9378bcb23758dc2cb0db9fe36993a0d22333baf7' }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || '318d7c928dba35aa65f675a35a3ff971b69f1fcc' }}
       PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
@@ -263,9 +264,11 @@ jobs:
           historical_input_treatment = os.environ.get(
               "EXACT5S_HISTORICAL_INPUT_TREATMENT", "control"
           )
-          if historical_input_treatment not in {"control", "move8", "page_up"}:
+          if historical_input_treatment not in {
+              "control", "move8", "page_up", "page_moves24"
+          }:
               raise SystemExit(
-                  "exact5s_historical_input_treatment must be control, move8, or page_up"
+                  "exact5s_historical_input_treatment must be control, move8, page_up, or page_moves24"
               )
           historical_move_override = (
               "true" if historical_input_treatment == "move8" else "false"
@@ -273,6 +276,14 @@ jobs:
           historical_release_override = (
               "true" if historical_input_treatment == "page_up" else "false"
           )
+          if historical_input_treatment == "page_moves24" and (
+              historical_overlay != "true"
+              or release_mode != "cdp_up"
+              or move_steps != 24
+          ):
+              raise SystemExit(
+                  "exact5s page_moves24 treatment requires historical overlay, cdp_up, and 24 moves"
+              )
           if historical_move_override == "true" and (
               historical_overlay != "true"
               or release_mode != "cdp_up"
@@ -413,7 +424,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '9378bcb23758dc2cb0db9fe36993a0d22333baf7' }}
+          ref: ${{ inputs.recovery_source_ref || '318d7c928dba35aa65f675a35a3ff971b69f1fcc' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -422,7 +433,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$PRIVATE_SOURCE_SHA" = "9378bcb23758dc2cb0db9fe36993a0d22333baf7"
+          test "$PRIVATE_SOURCE_SHA" = "318d7c928dba35aa65f675a35a3ff971b69f1fcc"
           test "$actual" = "$PRIVATE_SOURCE_SHA"
           echo "private_source_commit=$actual"
           echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
@@ -1067,7 +1078,7 @@ jobs:
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '20cafe830c2c9215d7bea34d16a5aaf894783442'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '848d43c7b88d4b1ff0b8bb3e2921114af88bbf8f'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '69f1f5eb96cdb984909fdc54b1d67d1b1a0dde96'
           controller_overridden=false
           if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
             test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '2ccc22a5948dd9b1d7cef0e58d044ac57ed6f5ec'
@@ -1333,6 +1344,13 @@ jobs:
           if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "page_up" ]; then
             historical_release_args+=(--semiprotocol-allow-historical-release-override)
           fi
+          historical_page_move_args=()
+          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "page_moves24" ]; then
+            historical_page_move_args+=(
+              --semiprotocol-page-move-count 24
+              --semiprotocol-allow-historical-page-move-override
+            )
+          fi
           proxy_args=()
           if [ -n "${OUTLOOK_PROXY_URL:-}" ]; then
             proxy_args+=(--network-proxy "$OUTLOOK_PROXY_URL")
@@ -1370,6 +1388,7 @@ jobs:
               "${human_mode_args[@]}" \
               "${historical_move_args[@]}" \
               "${historical_release_args[@]}" \
+              "${historical_page_move_args[@]}" \
               "${bridge_args[@]}" \
               "${proxy_args[@]}" \
               "${entry_args[@]}" \
