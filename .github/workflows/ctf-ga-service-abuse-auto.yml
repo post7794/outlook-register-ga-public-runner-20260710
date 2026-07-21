@@ -75,14 +75,15 @@ on:
         description: "Exact5s dense pressed-move count (1-24); 24 is the historical control"
         required: true
         default: "24"
-      exact5s_historical_move_override:
-        description: "Explicitly allow the isolated 8-move hosted-runner treatment with the historical overlay"
+      exact5s_historical_input_treatment:
+        description: "Historical exact5s input arm: unchanged control, 8 moves, or page.mouse release"
         required: true
-        default: "false"
-      exact5s_historical_release_override:
-        description: "Explicitly allow the isolated page.mouse release treatment with the historical overlay"
-        required: true
-        default: "false"
+        default: "control"
+        type: choice
+        options:
+          - control
+          - move8
+          - page_up
       exact5s_hold_attempts:
         description: "Maximum physical holds per rendered exact5s challenge (1-2)"
         required: true
@@ -169,8 +170,7 @@ jobs:
       HUMAN_RUNTIME_REF: ${{ (github.event_name == 'schedule' && 'natural10' || inputs.recovery_human_mode || 'exact5s') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
       EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
-      EXACT5S_HISTORICAL_MOVE_OVERRIDE: ${{ inputs.exact5s_historical_move_override || 'false' }}
-      EXACT5S_HISTORICAL_RELEASE_OVERRIDE: ${{ inputs.exact5s_historical_release_override || 'false' }}
+      EXACT5S_HISTORICAL_INPUT_TREATMENT: ${{ inputs.exact5s_historical_input_treatment || 'control' }}
       EXACT5S_HOLD_ATTEMPTS: ${{ inputs.exact5s_hold_attempts || '1' }}
       EXACT5S_FINAL_XGHM_TARGET: ${{ inputs.exact5s_final_xghm_target || '0' }}
       EXACT5S_FINAL_XGHM_START_INDEX: ${{ inputs.exact5s_final_xghm_start_index || '1' }}
@@ -260,18 +260,19 @@ jobs:
           move_steps = int(os.environ.get("EXACT5S_MOVE_STEPS", "0"))
           if not 1 <= move_steps <= 24:
               raise SystemExit("exact5s_move_steps must be in range 1..24")
-          historical_move_override = os.environ.get(
-              "EXACT5S_HISTORICAL_MOVE_OVERRIDE", "false"
+          historical_input_treatment = os.environ.get(
+              "EXACT5S_HISTORICAL_INPUT_TREATMENT", "control"
           )
-          if historical_move_override not in {"true", "false"}:
-              raise SystemExit("exact5s_historical_move_override must be true or false")
-          historical_release_override = os.environ.get(
-              "EXACT5S_HISTORICAL_RELEASE_OVERRIDE", "false"
+          if historical_input_treatment not in {"control", "move8", "page_up"}:
+              raise SystemExit(
+                  "exact5s_historical_input_treatment must be control, move8, or page_up"
+              )
+          historical_move_override = (
+              "true" if historical_input_treatment == "move8" else "false"
           )
-          if historical_release_override not in {"true", "false"}:
-              raise SystemExit("exact5s_historical_release_override must be true or false")
-          if historical_move_override == "true" and historical_release_override == "true":
-              raise SystemExit("historical move and release overrides are mutually exclusive")
+          historical_release_override = (
+              "true" if historical_input_treatment == "page_up" else "false"
+          )
           if historical_move_override == "true" and (
               historical_overlay != "true"
               or release_mode != "cdp_up"
@@ -396,8 +397,7 @@ jobs:
           print(f"registration natural overlay={registration_natural_overlay}")
           print(f"exact5s release mode={release_mode}")
           print(f"exact5s move steps={move_steps}")
-          print(f"exact5s historical move override={historical_move_override}")
-          print(f"exact5s historical release override={historical_release_override}")
+          print(f"exact5s historical input treatment={historical_input_treatment}")
           print(f"exact5s hold attempts={hold_attempts}")
           print(f"exact5s final XGhm target={xghm_target}")
           print(f"exact5s final XGhm start index={xghm_start}")
@@ -1326,11 +1326,11 @@ jobs:
             bridge_args+=(--natural-force-w0-after-minus1)
           fi
           historical_move_args=()
-          if [ "$EXACT5S_HISTORICAL_MOVE_OVERRIDE" = "true" ]; then
+          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "move8" ]; then
             historical_move_args+=(--semiprotocol-allow-historical-move-override)
           fi
           historical_release_args=()
-          if [ "$EXACT5S_HISTORICAL_RELEASE_OVERRIDE" = "true" ]; then
+          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "page_up" ]; then
             historical_release_args+=(--semiprotocol-allow-historical-release-override)
           fi
           proxy_args=()
@@ -1574,8 +1574,7 @@ jobs:
               ),
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
-              "exact5s_historical_move_override": os.environ.get("EXACT5S_HISTORICAL_MOVE_OVERRIDE") == "true",
-              "exact5s_historical_release_override": os.environ.get("EXACT5S_HISTORICAL_RELEASE_OVERRIDE") == "true",
+              "exact5s_historical_input_treatment": os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") or "control",
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
               "exact5s_final_xghm_target": float(os.environ.get("EXACT5S_FINAL_XGHM_TARGET") or 0),
               "exact5s_final_xghm_start_index": int(os.environ.get("EXACT5S_FINAL_XGHM_START_INDEX") or 1),
