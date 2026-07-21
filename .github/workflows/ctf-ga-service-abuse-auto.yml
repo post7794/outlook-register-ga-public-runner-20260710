@@ -1332,6 +1332,11 @@ jobs:
           source = Path(os.environ["LOG"])
           target = Path(os.environ["OUT"])
           allowed = ("[recovery]", "[Captcha]", "[Probe]")
+          allowed_frame_state = (
+              "  runtime frame[",
+              "  frame[",
+              "  knp frame[",
+          )
 
           def scrub_url(match):
               raw = match.group(0).rstrip("'\"),]}")
@@ -1346,7 +1351,7 @@ jobs:
           rows = []
           if source.exists():
               for raw in source.read_text(encoding="utf-8", errors="replace").splitlines():
-                  if not raw.startswith(allowed):
+                  if not raw.startswith(allowed) and not raw.startswith(allowed_frame_state):
                       continue
                   line = re.sub(r"https?://[^\s]+", scrub_url, raw)
                   line = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "[email-redacted]", line)
