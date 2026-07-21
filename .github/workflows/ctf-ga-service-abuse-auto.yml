@@ -76,7 +76,7 @@ on:
         required: true
         default: "24"
       exact5s_historical_input_treatment:
-        description: "Historical exact5s input arm: unchanged control, 8 moves, or page.mouse release"
+        description: "Historical exact5s arm: input transport controls or bounded empty-Dz rescue"
         required: true
         default: "control"
         type: choice
@@ -85,6 +85,7 @@ on:
           - move8
           - page_up
           - page_moves24
+          - empty_dz
       exact5s_hold_attempts:
         description: "Maximum physical holds per rendered exact5s challenge (1-2)"
         required: true
@@ -116,7 +117,7 @@ on:
       recovery_source_ref:
         description: "Immutable private recovery-control source commit"
         required: true
-        default: "318d7c928dba35aa65f675a35a3ff971b69f1fcc"
+        default: "fa8e24de97f631d7641e2551bd206accab4f6253"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -145,7 +146,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
-      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || '318d7c928dba35aa65f675a35a3ff971b69f1fcc' }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'fa8e24de97f631d7641e2551bd206accab4f6253' }}
       PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
@@ -265,10 +266,11 @@ jobs:
               "EXACT5S_HISTORICAL_INPUT_TREATMENT", "control"
           )
           if historical_input_treatment not in {
-              "control", "move8", "page_up", "page_moves24"
+              "control", "move8", "page_up", "page_moves24", "empty_dz"
           }:
               raise SystemExit(
-                  "exact5s_historical_input_treatment must be control, move8, page_up, or page_moves24"
+                  "exact5s_historical_input_treatment must be control, move8, page_up, "
+                  "page_moves24, or empty_dz"
               )
           historical_move_override = (
               "true" if historical_input_treatment == "move8" else "false"
@@ -276,13 +278,13 @@ jobs:
           historical_release_override = (
               "true" if historical_input_treatment == "page_up" else "false"
           )
-          if historical_input_treatment == "page_moves24" and (
+          if historical_input_treatment in {"page_moves24", "empty_dz"} and (
               historical_overlay != "true"
               or release_mode != "cdp_up"
               or move_steps != 24
           ):
               raise SystemExit(
-                  "exact5s page_moves24 treatment requires historical overlay, cdp_up, and 24 moves"
+                  "exact5s page-move treatment requires historical overlay, cdp_up, and 24 moves"
               )
           if historical_move_override == "true" and (
               historical_overlay != "true"
@@ -340,6 +342,23 @@ jobs:
           if human_mode == "natural10" and force_minus1 == "true" and bridge != "true":
               raise SystemExit(
                   "natural10 force-W0 requires natural_w0_bridge=true"
+              )
+          if historical_input_treatment == "empty_dz" and (
+              historical_overlay != "true"
+              or human_mode != "exact5s"
+              or release_mode != "cdp_up"
+              or move_steps != 24
+              or hold_attempts != 1
+              or xghm_target != 0
+              or xghm_start != 1
+              or mode != "ads_safe"
+              or bridge != "true"
+              or force_minus1 != "false"
+              or rounds != 8
+          ):
+              raise SystemExit(
+                  "exact5s empty_dz treatment requires the historical page_moves24 "
+                  "control, one hold, live XGhm, ads_safe, no force-W0, and eight rounds"
               )
           if historical_overlay == "true" and (
               human_mode != "exact5s"
@@ -424,7 +443,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '318d7c928dba35aa65f675a35a3ff971b69f1fcc' }}
+          ref: ${{ inputs.recovery_source_ref || 'fa8e24de97f631d7641e2551bd206accab4f6253' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -433,7 +452,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$PRIVATE_SOURCE_SHA" = "318d7c928dba35aa65f675a35a3ff971b69f1fcc"
+          test "$PRIVATE_SOURCE_SHA" = "fa8e24de97f631d7641e2551bd206accab4f6253"
           test "$actual" = "$PRIVATE_SOURCE_SHA"
           echo "private_source_commit=$actual"
           echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
@@ -1078,7 +1097,7 @@ jobs:
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '20cafe830c2c9215d7bea34d16a5aaf894783442'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '69f1f5eb96cdb984909fdc54b1d67d1b1a0dde96'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = 'c983b9ccb8d23b9a11fd8710913ebc4441058b84'
           controller_overridden=false
           if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
             test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '2ccc22a5948dd9b1d7cef0e58d044ac57ed6f5ec'
@@ -1125,6 +1144,14 @@ jobs:
               "human_runtime_commit": os.environ.get("HUMAN_RUNTIME_REF"),
               "browser_engine": os.environ.get("RECOVERY_BROWSER_ENGINE"),
               "historical_protocol_overlay": os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true",
+              "historical_empty_dz_rescue": os.environ.get(
+                  "EXACT5S_HISTORICAL_INPUT_TREATMENT"
+              ) == "empty_dz",
+              "historical_empty_dz_rescue_version": (
+                  1
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  else None
+              ),
               "registration_natural_overlay": os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true",
               "protocol_sha256": os.environ.get("PROTOCOL_SHA256") or None,
               "controller_overridden": os.environ.get("RECOVERY_BROWSER_ENGINE") == "camoufox",
@@ -1345,11 +1372,16 @@ jobs:
             historical_release_args+=(--semiprotocol-allow-historical-release-override)
           fi
           historical_page_move_args=()
-          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "page_moves24" ]; then
+          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "page_moves24" ] || \
+             [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "empty_dz" ]; then
             historical_page_move_args+=(
               --semiprotocol-page-move-count 24
               --semiprotocol-allow-historical-page-move-override
             )
+          fi
+          historical_empty_dz_args=()
+          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "empty_dz" ]; then
+            historical_empty_dz_args+=(--semiprotocol-historical-empty-dz-rescue)
           fi
           proxy_args=()
           if [ -n "${OUTLOOK_PROXY_URL:-}" ]; then
@@ -1389,6 +1421,7 @@ jobs:
               "${historical_move_args[@]}" \
               "${historical_release_args[@]}" \
               "${historical_page_move_args[@]}" \
+              "${historical_empty_dz_args[@]}" \
               "${bridge_args[@]}" \
               "${proxy_args[@]}" \
               "${entry_args[@]}" \
@@ -1594,6 +1627,14 @@ jobs:
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
               "exact5s_historical_input_treatment": os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") or "control",
+              "historical_empty_dz_rescue": os.environ.get(
+                  "EXACT5S_HISTORICAL_INPUT_TREATMENT"
+              ) == "empty_dz",
+              "historical_empty_dz_rescue_version": (
+                  1
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  else None
+              ),
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
               "exact5s_final_xghm_target": float(os.environ.get("EXACT5S_FINAL_XGHM_TARGET") or 0),
               "exact5s_final_xghm_start_index": int(os.environ.get("EXACT5S_FINAL_XGHM_START_INDEX") or 1),
