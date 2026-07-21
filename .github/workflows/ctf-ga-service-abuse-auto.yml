@@ -24,13 +24,14 @@ on:
           - camoufox
           - cloak
       recovery_fingerprint_mode:
-        description: "Cloak fingerprint seed: preserve the private manifest or derive one per fresh runner slot"
+        description: "Cloak manifest: preserve private values, derive a seed per slot, or reproduce the local TierRestore-success browser inputs"
         required: true
         default: "fixed"
         type: choice
         options:
           - fixed
           - per_slot
+          - historical_success
       lease_ttl_seconds:
         description: "Coordinator lease TTL; must cover browser recovery and writeback"
         required: true
@@ -147,7 +148,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
-      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'f2aa79971fc5d97715b6bfd6667327889e3bd921' }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || '342a9560575f7da818a583992613b7018773d027' }}
       PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
@@ -222,10 +223,14 @@ jobs:
           if browser_engine not in {"cloak", "camoufox"}:
               raise SystemExit("recovery_browser_engine must be cloak or camoufox")
           fingerprint_mode = os.environ.get("RECOVERY_FINGERPRINT_MODE", "fixed")
-          if fingerprint_mode not in {"fixed", "per_slot"}:
-              raise SystemExit("recovery_fingerprint_mode must be fixed or per_slot")
-          if fingerprint_mode == "per_slot" and browser_engine != "cloak":
-              raise SystemExit("recovery_fingerprint_mode=per_slot requires the Cloak browser")
+          if fingerprint_mode not in {"fixed", "per_slot", "historical_success"}:
+              raise SystemExit(
+                  "recovery_fingerprint_mode must be fixed, per_slot, or historical_success"
+              )
+          if fingerprint_mode in {"per_slot", "historical_success"} and browser_engine != "cloak":
+              raise SystemExit(
+                  f"recovery_fingerprint_mode={fingerprint_mode} requires the Cloak browser"
+              )
           stop_before_round = int(
               os.environ.get("SEMIPROTOCOL_STOP_BEFORE_SERVER_ROUND", "4")
           )
@@ -454,7 +459,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$PRIVATE_SOURCE_SHA" = "f2aa79971fc5d97715b6bfd6667327889e3bd921"
+          test "$PRIVATE_SOURCE_SHA" = "342a9560575f7da818a583992613b7018773d027"
           test "$actual" = "$PRIVATE_SOURCE_SHA"
           echo "private_source_commit=$actual"
           echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
@@ -1098,8 +1103,8 @@ jobs:
           runtime="$GITHUB_WORKSPACE/.production-human-runtime"
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '20cafe830c2c9215d7bea34d16a5aaf894783442'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '4c31d022323e9fce3e566c6b413e125e1a9a24e6'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'fa69c406d6dbee5563d8e6075952074855eb3c32'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '4ec34bf18ffc27759fc5a901ddbbd0638feda424'
           controller_overridden=false
           if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
             test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '2ccc22a5948dd9b1d7cef0e58d044ac57ed6f5ec'
@@ -1147,6 +1152,10 @@ jobs:
               "public_runner_repository": os.environ.get("PUBLIC_RUNNER_REPOSITORY"),
               "human_runtime_commit": os.environ.get("HUMAN_RUNTIME_REF"),
               "browser_engine": os.environ.get("RECOVERY_BROWSER_ENGINE"),
+              "fingerprint_mode": os.environ.get("RECOVERY_FINGERPRINT_MODE"),
+              "historical_success_manifest": (
+                  os.environ.get("RECOVERY_FINGERPRINT_MODE") == "historical_success"
+              ),
               "historical_protocol_overlay": os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true",
               "historical_empty_dz_rescue": os.environ.get(
                   "EXACT5S_HISTORICAL_INPUT_TREATMENT"
@@ -1259,7 +1268,37 @@ jobs:
               )
           else:
               cloak = browser.get("cloakbrowser") or {}
-              if fingerprint_mode == "per_slot":
+              if fingerprint_mode == "historical_success":
+                  historical_ua = (
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/148.0.7728.121 Safari/537.36"
+                  )
+                  cloak = {
+                      "locale": "en-US",
+                      "humanize": True,
+                      "human_preset": "careful",
+                      "headless": False,
+                      "args": [
+                          "--fingerprint=96290",
+                          "--fingerprint-platform=windows",
+                          "--window-size=1010,1084",
+                      ],
+                  }
+                  browser["cloakbrowser"] = cloak
+                  browser["context"] = {
+                      "locale": "en-US",
+                      "viewport": None,
+                      "user_agent": historical_ua,
+                      "extra_http_headers": {
+                          "Accept-Language": "en-US,en;q=0.9",
+                      },
+                  }
+                  browser["recovery_fingerprint_override"] = {
+                      "mode": "historical_success",
+                      "schema": 1,
+                  }
+              elif fingerprint_mode == "per_slot":
                   run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
                   slot = os.environ.get("RECOVERY_SLOT", "").strip()
                   if not run_id or not slot:
@@ -1278,20 +1317,51 @@ jobs:
                   profile["source"] = "GA per-run deterministic seed"
               context = browser.get("context") or {}
               args = [str(item) for item in (cloak.get("args") or [])]
-              valid = (
-                  sum(item.startswith("--fingerprint=") for item in args) == 1
-                  and "--fingerprint-platform=windows" in args
-                  and sum(item.startswith("--window-size=") for item in args) == 1
-                  and "viewport" in context
-                  and context["viewport"] is None
-                  and bool(context.get("locale"))
-                  and bool(context.get("user_agent"))
-                  and bool((context.get("extra_http_headers") or {}).get("Accept-Language"))
-                  and (
-                      not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
-                      or bool(browser.get("proxy"))
-                  )
+              provenance_proxy_valid = (
+                  not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
+                  or bool(browser.get("proxy"))
               )
+              if fingerprint_mode == "historical_success":
+                  valid = (
+                      args == [
+                          "--fingerprint=96290",
+                          "--fingerprint-platform=windows",
+                          "--window-size=1010,1084",
+                      ]
+                      and cloak.get("locale") == "en-US"
+                      and cloak.get("humanize") is True
+                      and cloak.get("human_preset") == "careful"
+                      and cloak.get("headless") is False
+                      and context == {
+                          "locale": "en-US",
+                          "viewport": None,
+                          "user_agent": (
+                              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/148.0.7728.121 Safari/537.36"
+                          ),
+                          "extra_http_headers": {
+                              "Accept-Language": "en-US,en;q=0.9",
+                          },
+                      }
+                      and browser.get("recovery_fingerprint_override") == {
+                          "mode": "historical_success",
+                          "schema": 1,
+                      }
+                      and provenance_proxy_valid
+                  )
+              else:
+                  valid = (
+                      sum(item.startswith("--fingerprint=") for item in args) == 1
+                      and "--fingerprint-platform=windows" in args
+                      and sum(item.startswith("--window-size=") for item in args) == 1
+                      and "viewport" in context
+                      and context["viewport"] is None
+                      and bool(context.get("locale"))
+                      and bool(context.get("user_agent"))
+                      and bool((context.get("extra_http_headers") or {}).get("Accept-Language"))
+                      and provenance_proxy_valid
+                  )
           if not valid:
               raise SystemExit("Registration environment manifest is incomplete")
           private.joinpath("browser-env.json").write_text(
@@ -1482,6 +1552,12 @@ jobs:
             cp "$observer_source" "$observer_safe"
           fi
           echo "historical_input_observer_safe=$observer_safe" >> "$GITHUB_OUTPUT"
+          runtime_kind_safe="$RUNNER_TEMP/historical-runtime-kinds.safe.json"
+          runtime_kind_source="$RUNNER_TEMP/service-abuse-auto-semiprotocol/historical-runtime-kinds.safe.json"
+          if [ -s "$runtime_kind_source" ]; then
+            cp "$runtime_kind_source" "$runtime_kind_safe"
+          fi
+          echo "historical_runtime_kind_safe=$runtime_kind_safe" >> "$GITHUB_OUTPUT"
           LOG="$log" OUT="$probe_safe" "$venv_python" - <<'PY' || : > "$probe_safe"
           import os
           import re
@@ -1741,6 +1817,7 @@ jobs:
             ${{ steps.recovery.outputs.writeback_safe }}
             ${{ steps.recovery.outputs.probe_safe }}
             ${{ steps.recovery.outputs.historical_input_observer_safe }}
+            ${{ steps.recovery.outputs.historical_runtime_kind_safe }}
             ${{ steps.complete.outputs.safe }}
 
       - name: Cleanup private recovery material
