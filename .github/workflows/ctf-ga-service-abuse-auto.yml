@@ -148,7 +148,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
-      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || '342a9560575f7da818a583992613b7018773d027' }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'aefd06bae74f00eac24b00b34d0a70429a709a08' }}
       PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
@@ -459,7 +459,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$PRIVATE_SOURCE_SHA" = "342a9560575f7da818a583992613b7018773d027"
+          test "$PRIVATE_SOURCE_SHA" = "aefd06bae74f00eac24b00b34d0a70429a709a08"
           test "$actual" = "$PRIVATE_SOURCE_SHA"
           echo "private_source_commit=$actual"
           echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
@@ -1104,12 +1104,14 @@ jobs:
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = 'fa69c406d6dbee5563d8e6075952074855eb3c32'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '4ec34bf18ffc27759fc5a901ddbbd0638feda424'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = 'f32bb70e045e1305badf247becbfa4f2481446e3'
           controller_overridden=false
-          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
-            test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '2ccc22a5948dd9b1d7cef0e58d044ac57ed6f5ec'
-            test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:requirements-camoufox.txt)" = '7d2db5dec9df33c78ac89fdbb27a553aa339424e'
+          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ] || [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
+            test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '0cb8e9254d11179fe443ae90d3cf89583140eee6'
             controller_overridden=true
+          fi
+          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
+            test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:requirements-camoufox.txt)" = '7d2db5dec9df33c78ac89fdbb27a553aa339424e'
           fi
           protocol_source="$GITHUB_WORKSPACE/protocol_runtime_probe.py"
           protocol_sha256=""
@@ -1129,7 +1131,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$GITHUB_WORKSPACE/early_w0_state.py" "$runtime/early_w0_state.py"
           cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/recovery_observability_probe.py"
-          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
+          if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ] || [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
             cp "$GITHUB_WORKSPACE/controllers/patchright_controller.py" "$runtime/controllers/patchright_controller.py"
           fi
           cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
@@ -1179,7 +1181,10 @@ jobs:
               ),
               "registration_natural_overlay": os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true",
               "protocol_sha256": os.environ.get("PROTOCOL_SHA256") or None,
-              "controller_overridden": os.environ.get("RECOVERY_BROWSER_ENGINE") == "camoufox",
+              "controller_overridden": (
+                  os.environ.get("RECOVERY_BROWSER_ENGINE") == "camoufox"
+                  or os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
+              ),
               "py_compile_ok": True,
           }
           Path(os.environ["SAFE"]).write_text(json.dumps(safe, indent=2), encoding="utf-8")
