@@ -117,7 +117,7 @@ on:
       recovery_source_ref:
         description: "Immutable private recovery-control source commit"
         required: true
-        default: "fa8e24de97f631d7641e2551bd206accab4f6253"
+        default: "f2aa79971fc5d97715b6bfd6667327889e3bd921"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -146,7 +146,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
-      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'fa8e24de97f631d7641e2551bd206accab4f6253' }}
+      PRIVATE_SOURCE_SHA: ${{ inputs.recovery_source_ref || 'f2aa79971fc5d97715b6bfd6667327889e3bd921' }}
       PUBLIC_RUNNER_REPOSITORY: ${{ github.repository }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_RUNNER_LABEL: ${{ github.event_name == 'schedule' && 'ubuntu-22.04' || inputs.runner || 'windows-2022' }}
@@ -443,7 +443,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'fa8e24de97f631d7641e2551bd206accab4f6253' }}
+          ref: ${{ inputs.recovery_source_ref || 'f2aa79971fc5d97715b6bfd6667327889e3bd921' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -452,7 +452,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$PRIVATE_SOURCE_SHA" = "fa8e24de97f631d7641e2551bd206accab4f6253"
+          test "$PRIVATE_SOURCE_SHA" = "f2aa79971fc5d97715b6bfd6667327889e3bd921"
           test "$actual" = "$PRIVATE_SOURCE_SHA"
           echo "private_source_commit=$actual"
           echo "public_runner_repository=$PUBLIC_RUNNER_REPOSITORY"
@@ -1097,7 +1097,7 @@ jobs:
           test "$(git -C "$runtime" rev-parse HEAD)" = "$HUMAN_RUNTIME_REF"
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:early_w0_state.py)" = 'c964217e8ed825fea140287e5198441cfb5f1daf'
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:protocol_runtime_probe.py)" = '20cafe830c2c9215d7bea34d16a5aaf894783442'
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = 'c983b9ccb8d23b9a11fd8710913ebc4441058b84'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:tools/service_abuse_recovery.py)" = '4c31d022323e9fce3e566c6b413e125e1a9a24e6'
           controller_overridden=false
           if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
             test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:controllers/patchright_controller.py)" = '2ccc22a5948dd9b1d7cef0e58d044ac57ed6f5ec'
@@ -1121,12 +1121,14 @@ jobs:
           fi
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$GITHUB_WORKSPACE/early_w0_state.py" "$runtime/early_w0_state.py"
+          cp "$GITHUB_WORKSPACE/protocol_runtime_probe.py" "$runtime/recovery_observability_probe.py"
           if [ "$RECOVERY_BROWSER_ENGINE" = "camoufox" ]; then
             cp "$GITHUB_WORKSPACE/controllers/patchright_controller.py" "$runtime/controllers/patchright_controller.py"
           fi
           cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
           "$VENV_PYTHON" -m py_compile \
             "$runtime/early_w0_state.py" \
+            "$runtime/recovery_observability_probe.py" \
             "$runtime/protocol_runtime_probe.py" \
             "$runtime/controllers/patchright_controller.py" \
             "$runtime/tools/service_abuse_recovery.py"
@@ -1148,6 +1150,14 @@ jobs:
                   "EXACT5S_HISTORICAL_INPUT_TREATMENT"
               ) == "empty_dz",
               "historical_empty_dz_rescue_version": (
+                  1
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  else None
+              ),
+              "historical_input_observer": os.environ.get(
+                  "EXACT5S_HISTORICAL_INPUT_TREATMENT"
+              ) == "empty_dz",
+              "historical_input_observer_version": (
                   1
                   if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
                   else None
@@ -1459,6 +1469,12 @@ jobs:
           echo "safe_status=$safe" >> "$GITHUB_OUTPUT"
           echo "writeback_safe=$writeback_safe" >> "$GITHUB_OUTPUT"
           echo "probe_safe=$probe_safe" >> "$GITHUB_OUTPUT"
+          observer_safe="$RUNNER_TEMP/historical-input-observer.safe.json"
+          observer_source="$RUNNER_TEMP/service-abuse-auto-semiprotocol/historical-input-observer.safe.json"
+          if [ -s "$observer_source" ]; then
+            cp "$observer_source" "$observer_safe"
+          fi
+          echo "historical_input_observer_safe=$observer_safe" >> "$GITHUB_OUTPUT"
           LOG="$log" OUT="$probe_safe" "$venv_python" - <<'PY' || : > "$probe_safe"
           import os
           import re
@@ -1635,6 +1651,14 @@ jobs:
                   if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
                   else None
               ),
+              "historical_input_observer": os.environ.get(
+                  "EXACT5S_HISTORICAL_INPUT_TREATMENT"
+              ) == "empty_dz",
+              "historical_input_observer_version": (
+                  1
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  else None
+              ),
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
               "exact5s_final_xghm_target": float(os.environ.get("EXACT5S_FINAL_XGHM_TARGET") or 0),
               "exact5s_final_xghm_start_index": int(os.environ.get("EXACT5S_FINAL_XGHM_START_INDEX") or 1),
@@ -1705,6 +1729,7 @@ jobs:
             ${{ steps.recovery.outputs.safe_status }}
             ${{ steps.recovery.outputs.writeback_safe }}
             ${{ steps.recovery.outputs.probe_safe }}
+            ${{ steps.recovery.outputs.historical_input_observer_safe }}
             ${{ steps.complete.outputs.safe }}
 
       - name: Cleanup private recovery material
