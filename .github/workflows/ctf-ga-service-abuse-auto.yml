@@ -86,6 +86,7 @@ on:
           - page_up
           - page_moves24
           - empty_dz
+          - empty_dz_control
       exact5s_hold_attempts:
         description: "Maximum physical holds per rendered exact5s challenge (1-2)"
         required: true
@@ -266,11 +267,12 @@ jobs:
               "EXACT5S_HISTORICAL_INPUT_TREATMENT", "control"
           )
           if historical_input_treatment not in {
-              "control", "move8", "page_up", "page_moves24", "empty_dz"
+              "control", "move8", "page_up", "page_moves24", "empty_dz",
+              "empty_dz_control"
           }:
               raise SystemExit(
                   "exact5s_historical_input_treatment must be control, move8, page_up, "
-                  "page_moves24, or empty_dz"
+                  "page_moves24, empty_dz, or empty_dz_control"
               )
           historical_move_override = (
               "true" if historical_input_treatment == "move8" else "false"
@@ -343,7 +345,7 @@ jobs:
               raise SystemExit(
                   "natural10 force-W0 requires natural_w0_bridge=true"
               )
-          if historical_input_treatment == "empty_dz" and (
+          if historical_input_treatment in {"empty_dz", "empty_dz_control"} and (
               historical_overlay != "true"
               or human_mode != "exact5s"
               or release_mode != "cdp_up"
@@ -357,8 +359,8 @@ jobs:
               or rounds != 8
           ):
               raise SystemExit(
-                  "exact5s empty_dz treatment requires the historical page_moves24 "
-                  "control, one hold, live XGhm, ads_safe, no force-W0, and eight rounds"
+                  "exact5s empty-Dz treatments require historical control timing, one "
+                  "hold, live XGhm, ads_safe, no force-W0, and eight rounds"
               )
           if historical_overlay == "true" and (
               human_mode != "exact5s"
@@ -1148,18 +1150,22 @@ jobs:
               "historical_protocol_overlay": os.environ.get("HISTORICAL_PROTOCOL_OVERLAY") == "true",
               "historical_empty_dz_rescue": os.environ.get(
                   "EXACT5S_HISTORICAL_INPUT_TREATMENT"
-              ) == "empty_dz",
+              ) in {"empty_dz", "empty_dz_control"},
               "historical_empty_dz_rescue_version": (
                   1
-                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") in {
+                      "empty_dz", "empty_dz_control"
+                  }
                   else None
               ),
               "historical_input_observer": os.environ.get(
                   "EXACT5S_HISTORICAL_INPUT_TREATMENT"
-              ) == "empty_dz",
+              ) in {"empty_dz", "empty_dz_control"},
               "historical_input_observer_version": (
                   1
-                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") in {
+                      "empty_dz", "empty_dz_control"
+                  }
                   else None
               ),
               "registration_natural_overlay": os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true",
@@ -1390,7 +1396,8 @@ jobs:
             )
           fi
           historical_empty_dz_args=()
-          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "empty_dz" ]; then
+          if [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "empty_dz" ] || \
+             [ "$EXACT5S_HISTORICAL_INPUT_TREATMENT" = "empty_dz_control" ]; then
             historical_empty_dz_args+=(--semiprotocol-historical-empty-dz-rescue)
           fi
           proxy_args=()
@@ -1645,18 +1652,22 @@ jobs:
               "exact5s_historical_input_treatment": os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") or "control",
               "historical_empty_dz_rescue": os.environ.get(
                   "EXACT5S_HISTORICAL_INPUT_TREATMENT"
-              ) == "empty_dz",
+              ) in {"empty_dz", "empty_dz_control"},
               "historical_empty_dz_rescue_version": (
                   1
-                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") in {
+                      "empty_dz", "empty_dz_control"
+                  }
                   else None
               ),
               "historical_input_observer": os.environ.get(
                   "EXACT5S_HISTORICAL_INPUT_TREATMENT"
-              ) == "empty_dz",
+              ) in {"empty_dz", "empty_dz_control"},
               "historical_input_observer_version": (
                   1
-                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") == "empty_dz"
+                  if os.environ.get("EXACT5S_HISTORICAL_INPUT_TREATMENT") in {
+                      "empty_dz", "empty_dz_control"
+                  }
                   else None
               ),
               "exact5s_hold_attempts": int(os.environ.get("EXACT5S_HOLD_ATTEMPTS") or 1),
