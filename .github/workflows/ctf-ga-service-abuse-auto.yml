@@ -90,7 +90,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "f43804df9059a4eb7122afdf31b90aa79c61f02d"
+        default: "112fd2233ea02496bef8f8e559b6c83d054b72c7"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -143,6 +143,7 @@ jobs:
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
+      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || '112fd2233ea02496bef8f8e559b6c83d054b72c7' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -164,7 +165,7 @@ jobs:
         run: |
           set -euo pipefail
           "$BOOTSTRAP_PYTHON" - <<'PY'
-          import json, os
+          import json, os, re
           slots = json.loads(os.environ["JOB_SLOTS_JSON"])
           current = int(os.environ["RECOVERY_SLOT"])
           valid = (
@@ -176,6 +177,9 @@ jobs:
           )
           if not valid:
               raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
+          source_ref = os.environ.get("RECOVERY_SOURCE_REF", "")
+          if not re.fullmatch(r"[0-9a-f]{40}", source_ref):
+              raise SystemExit("recovery_source_ref must be an exact lowercase 40-hex commit")
           runner_label = os.environ.get("RECOVERY_RUNNER_LABEL", "")
           if runner_label not in {"ubuntu-22.04", "windows-2022"}:
               raise SystemExit("runner must be ubuntu-22.04 or windows-2022")
@@ -322,9 +326,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'f43804df9059a4eb7122afdf31b90aa79c61f02d' }}
+          ref: ${{ inputs.recovery_source_ref || '112fd2233ea02496bef8f8e559b6c83d054b72c7' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
+
+      - name: Verify private recovery control commit
+        id: recovery_control
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$RECOVERY_SOURCE_REF"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          echo "commit=$actual" >> "$GITHUB_OUTPUT"
 
       - name: Verify historical protocol overlay source
         if: env.HISTORICAL_PROTOCOL_OVERLAY == 'true'
@@ -349,14 +363,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD:runtime_overlays/protocol_runtime_probe_875b057.py)" = \
-            '6a95bc27c418e6e759d59ef6f2061c4c20fea090'
+            '394e9e3bf62089ab3fc323152a6cbe693d883537'
           "$BOOTSTRAP_PYTHON" - <<'PY'
           import hashlib
           from pathlib import Path
 
           source = Path("runtime_overlays/protocol_runtime_probe_875b057.py")
           actual = hashlib.sha256(source.read_bytes()).hexdigest()
-          expected = "f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6"
+          expected = "faec4e4b068bd1a0be47d62806444d47d15252a3a1d7c9c0294f5ec0fcf7fd0a"
           if actual != expected:
               raise SystemExit(f"registration natural protocol overlay mismatch: {actual}")
           print(f"registration natural protocol overlay verified sha256={actual}")
@@ -817,15 +831,19 @@ jobs:
           cloak = browser.get("cloakbrowser") or {}
           context = browser.get("context") or {}
           args = [str(item) for item in (cloak.get("args") or [])]
+          accept_language = str(
+              (context.get("extra_http_headers") or {}).get("Accept-Language") or ""
+          )
+          primary_language = accept_language.split(",", 1)[0].split(";", 1)[0].strip()
           valid = (
               sum(item.startswith("--fingerprint=") for item in args) == 1
               and "--fingerprint-platform=windows" in args
               and sum(item.startswith("--window-size=") for item in args) == 1
               and "viewport" in context
               and context["viewport"] is None
-              and bool(context.get("locale"))
+              and str(context.get("locale") or "") == "en-US"
               and bool(context.get("user_agent"))
-              and bool((context.get("extra_http_headers") or {}).get("Accept-Language"))
+              and primary_language == "en-US"
               and (
                   not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
                   or bool(browser.get("proxy"))
@@ -931,7 +949,7 @@ jobs:
             actual_protocol_sha256=$("$GITHUB_WORKSPACE/$VENV_PYTHON" -c \
               'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
               "$protocol_source")
-            test "$actual_protocol_sha256" = 'f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6'
+            test "$actual_protocol_sha256" = 'faec4e4b068bd1a0be47d62806444d47d15252a3a1d7c9c0294f5ec0fcf7fd0a'
           fi
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
@@ -1086,6 +1104,8 @@ jobs:
           RUNTIME_SAFE: ${{ steps.recovery.outputs.safe_status }}
           WRITEBACK_SAFE: ${{ steps.recovery.outputs.writeback_safe }}
           COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
+          RECOVERY_SOURCE_VERIFIED: ${{ steps.recovery_control.outputs.verified }}
+          RECOVERY_SOURCE_COMMIT: ${{ steps.recovery_control.outputs.commit }}
         run: |
           set -euo pipefail
           verdict_python="$VENV_PYTHON"
@@ -1113,9 +1133,11 @@ jobs:
           writeback = load(os.environ.get("WRITEBACK_SAFE", ""))
           completion = load(os.environ.get("COMPLETION_SAFE", ""))
           verdict = {
-              "schema": 1,
+              "schema": 2,
               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
               "slot": int(os.environ.get("RECOVERY_SLOT") or 0),
+              "recovery_source_verified": os.environ.get("RECOVERY_SOURCE_VERIFIED") == "true",
+              "recovery_source_commit": os.environ.get("RECOVERY_SOURCE_COMMIT") or None,
               "recovery_network_mode": os.environ.get("RECOVERY_NETWORK_MODE") or None,
               "proxy_pool_profile": os.environ.get("PROXY_POOL_PROFILE") or None,
               "proxy_pool_slot_offset": int(os.environ.get("PROXY_POOL_SLOT_OFFSET") or 0),
@@ -1128,15 +1150,19 @@ jobs:
               ),
               "registration_natural_overlay": os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true",
               "registration_natural_protocol_sha256": (
-                  "f87e09b29d1dd268e6ce4d5125a51c865a95ebd40687cf36a2875c6d395f9cf6"
+                  "faec4e4b068bd1a0be47d62806444d47d15252a3a1d7c9c0294f5ec0fcf7fd0a"
                   if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
                   else None
               ),
               "registration_natural_one_shot": (
-                  True if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true" else None
+                  int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1) == 1
+                  if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
+                  else None
               ),
               "registration_retry_budget_equivalent": (
-                  False if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true" else None
+                  int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1) > 1
+                  if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
+                  else None
               ),
               "exact5s_release_mode": os.environ.get("EXACT5S_RELEASE_MODE") or None,
               "exact5s_move_steps": int(os.environ.get("EXACT5S_MOVE_STEPS") or 24),
@@ -1167,6 +1193,18 @@ jobs:
               "graph_ok": bool(runtime.get("graph_ok")),
               "production_writeback_ok": bool(runtime.get("production_writeback_ok")),
               "production_health_enrolled": bool(runtime.get("production_health_enrolled")),
+              "natural_strict_protocol_required": bool(runtime.get("natural_strict_protocol_required")),
+              "natural_strict_protocol_ok": bool(runtime.get("natural_strict_protocol_ok")),
+              "strict_run_succeeded": bool(runtime.get("strict_run_succeeded")),
+              "natural_real_final_results": [
+                  value for value in list(runtime.get("natural_real_final_results") or [])
+                  if value in {"-1", "0"}
+              ][-8:],
+              "natural_real_final_zero": bool(runtime.get("natural_real_final_zero")),
+              "natural_host_continue": bool(runtime.get("natural_host_continue")),
+              "natural_tier_restore_success": bool(runtime.get("natural_tier_restore_success")),
+              "natural_evidence_ordered": bool(runtime.get("natural_evidence_ordered")),
+              "natural_holds_used": int(runtime.get("natural_holds_used") or 0),
               "writeback_post_refresh_token_present": bool(writeback.get("post_refresh_token_present")),
               "outcome": completion.get("outcome") or None,
               "error_code": completion.get("error_code") or runtime.get("error_code") or "",
