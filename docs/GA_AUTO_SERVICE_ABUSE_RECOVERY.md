@@ -114,7 +114,7 @@ recovery protocol runtime blob
 natural hold implementation while restoring the recovery-specific early-W0
 pending route. Both object ids are checked before account work. Recovery uses
 the same natural hold envelope and first-hold warmup, but deliberately keeps
-`hold_retries=1`;
+the imported handler at `hold_retries=1`;
 Microsoft parent-page Retry remains bounded at two and iframe Retry is never
 clicked. `natural_final_proof_mode=minimal` also restores the registration
 path's narrow live PX561 normalizer; `off` retains the earlier timing-only
@@ -141,8 +141,32 @@ When `natural_server_challenge_rounds` is above one, another hold is allowed
 only after the current round records collector `result|0` and a later real
 `risk/verify` response issues a new HumanCaptcha continuation. A `result|-1`,
 `HumanCaptcha_Failure`, or a plain visible iframe Retry never opens a round.
+`natural_same_challenge_hold_attempts` is a separate outer-hold budget and
+defaults to `1`. Value `2` is accepted only for the registration-overlay
+natural10 bridge+force three-round treatment. It authorizes one second hold
+only when the first hold reaches its proof deadline without a final result or
+host transition and the unchanged challenge is still actionable. This guarded
+no-evidence retry does not match registration's three-hold retry budget, so
+`registration_retry_budget_equivalent` remains false.
 
-The default strict rule above remains unchanged. A separate manual-only input,
+Value `3` is a separate registration-equivalent arm. It requires the 875b057
+registration overlay, `natural10`, `minimal_natural_hold`, both W0 options
+disabled, a three-round hold budget, and `ubuntu-22.04`. The imported handler
+remains one-shot, while the outer state machine reproduces up to three physical
+holds with registration's motion, 9.5-12.5s hold envelope, first-hold warmup,
+and per-hold 16s proof wait. A stable live `result|-1` or no final can authorize
+the next same-challenge hold; `result|0`, a risk generation or verify-count
+change, host transition, HumanCaptcha success/failure, or `TierRestore` blocks
+it. Each retry uses a one-use token bound to the risk generation and verify
+request/response counters. The token is checked again immediately before
+mouse-down, and the second and third confirmed mouse-downs are recorded
+separately in the safe verdict. The public runner applies the same narrow,
+hash-verified controller patch to the exact 875b057 runtime for both multi-hold
+arms; it does not replace that runtime with the current controller.
+
+The default strict rule for ordinary one-shot runs remains unchanged. Both
+multi-hold arms require ordered real-final/host/TierRestore evidence before
+they can report `strict_run_succeeded`. A separate manual-only input,
 `natural_force_w0_after_minus1=true`, reproduces the one historical recovery
 mechanism that reached `TierRestore`: its first two live PX561 finals returned
 `result|-1`, the iframe received a synthetic W0 `result|0`, Microsoft issued a
@@ -252,15 +276,27 @@ job_slots_json=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 
 The input accepts 1-20 unique integer slots in the range 1-20. Redacted
 artifacts are named `ga-auto-recovery-safe-<run_id>-<slot>` so every slot can
-be audited independently. Set `natural_final_proof_mode=minimal` for the
-registration-equivalent treatment, `ads_safe` for the recovery-shaped BFA
-treatment, or `off` for the prior live-payload control.
+be audited independently. Set `natural_final_proof_mode=minimal_natural_hold`
+with `registration_natural_overlay=true` for the registration-runtime arms,
+`ads_safe` for the recovery-shaped BFA treatment, or `off` for the prior
+live-payload control.
 Keep the defaults `[1]`, `minimal`, `natural_w0_bridge=false`, and
 `natural_force_w0_after_minus1=false` for scheduled operation;
-`natural_server_challenge_rounds` also defaults to `1`, and
-`recovery_network_mode` remains `ga_own_ip`. Use a bounded value
-such as `3` only for the W0/fresh-round treatment until it proves the complete
-TierRestore/writeback loop.
+`natural_server_challenge_rounds` and
+`natural_same_challenge_hold_attempts` also default to `1`, and
+`recovery_network_mode` remains `ga_own_ip`. Use `2` only for the guarded
+W0/fresh-round treatment and `3` only for the registration-equivalent arm
+until either treatment proves the complete TierRestore/writeback loop.
+
+Keep the two multi-hold mechanisms in separate dispatches:
+
+```text
+guarded W0 arm:             holds=2, bridge=true,  force=true,  rounds=3
+registration-equivalent:   holds=3, bridge=false, force=false, rounds=3
+```
+
+Both require `registration_natural_overlay=true`, `natural10`,
+`minimal_natural_hold`, and `ubuntu-22.04`.
 
 Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,
@@ -290,12 +326,29 @@ failures are recorded and the orchestration job can still finish cleanly.
 Promotion requires the redacted verdict to show:
 
 ```text
+natural_real_final_results[-1]="0"
+natural_host_continue=true
+natural_tier_restore_success=true
+natural_evidence_ordered=true
 service_abuse_cleared=true
 graph_ok=true
+production_writeback_attempted=true
 production_writeback_ok=true
 production_health_enrolled=true
+strict_run_succeeded=true
+completed=true
 outcome=success
+outlook_operation_lease_released=true
+outlook_operation_lease_release_error=""
 ```
+
+For either same-challenge treatment, count only slots with
+`egress_admitted=true`, `leased=true`, and
+`natural_same_challenge_second_hold_executed=true` as experimental samples.
+The registration-equivalent arm additionally requires
+`natural_same_challenge_third_hold_executed=true` for a three-hold sample.
+Configured attempts or `natural_holds_used` alone do not prove that the
+generation-bound second or third mouse-down occurred.
 
 Important categories remain separate:
 

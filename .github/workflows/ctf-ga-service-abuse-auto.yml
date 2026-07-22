@@ -84,13 +84,17 @@ on:
         required: true
         default: "false"
       natural_server_challenge_rounds:
-        description: "Maximum fresh Microsoft HumanCaptcha rounds after accepted result|0 (1-8)"
+        description: "Maximum natural hold/server-challenge budget (1-8); fresh rounds still require accepted result|0"
+        required: true
+        default: "1"
+      natural_same_challenge_hold_attempts:
+        description: "Maximum outer holds for the same rendered natural challenge (1-3); 2 is bridge+force and 3 is registration-equivalent"
         required: true
         default: "1"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "ad83a0db5c90ee169f0d7c1f9de08c830a498b9c"
+        default: "064ae133edd94c6eccf1db41fe1b6407e0b4eb53"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -143,7 +147,8 @@ jobs:
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
-      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || 'ad83a0db5c90ee169f0d7c1f9de08c830a498b9c' }}
+      NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS: ${{ inputs.natural_same_challenge_hold_attempts || '1' }}
+      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || '064ae133edd94c6eccf1db41fe1b6407e0b4eb53' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -243,6 +248,13 @@ jobs:
           rounds = int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS", "0"))
           if not 1 <= rounds <= 8:
               raise SystemExit("natural_server_challenge_rounds must be in range 1..8")
+          same_challenge_hold_attempts = int(
+              os.environ.get("NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS", "0")
+          )
+          if not 1 <= same_challenge_hold_attempts <= 3:
+              raise SystemExit(
+                  "natural_same_challenge_hold_attempts must be in range 1..3"
+              )
           if human_mode == "exact5s" and (mode != "ads_safe" or bridge != "true"):
               raise SystemExit(
                   "exact5s requires natural_final_proof_mode=ads_safe and natural_w0_bridge=true"
@@ -252,6 +264,31 @@ jobs:
           if human_mode == "natural10" and force_minus1 == "true" and bridge != "true":
               raise SystemExit(
                   "natural10 force-W0 requires natural_w0_bridge=true"
+              )
+          if same_challenge_hold_attempts == 2 and (
+              registration_natural_overlay != "true"
+              or human_mode != "natural10"
+              or bridge != "true"
+              or force_minus1 != "true"
+              or rounds != 3
+              or runner_label != "ubuntu-22.04"
+          ):
+              raise SystemExit(
+                  "two same-challenge natural holds require the registration overlay "
+                  "natural10 bridge+force three-round treatment on ubuntu-22.04"
+              )
+          if same_challenge_hold_attempts == 3 and (
+              registration_natural_overlay != "true"
+              or human_mode != "natural10"
+              or mode != "minimal_natural_hold"
+              or bridge != "false"
+              or force_minus1 != "false"
+              or rounds != 3
+              or runner_label != "ubuntu-22.04"
+          ):
+              raise SystemExit(
+                  "three same-challenge natural holds require the registration-equivalent "
+                  "875b057 natural10 minimal_natural_hold three-round treatment on ubuntu-22.04"
               )
           if historical_overlay == "true" and (
               human_mode != "exact5s"
@@ -270,6 +307,7 @@ jobs:
           registration_challenge_policy = (bridge, force_minus1, rounds)
           registration_challenge_control = ("false", "false", 1)
           registration_challenge_rounds3 = ("true", "true", 3)
+          registration_challenge_rounds3_equivalent = ("false", "false", 3)
           if registration_natural_overlay == "true" and (
               historical_overlay != "false"
               or human_mode != "natural10"
@@ -278,6 +316,7 @@ jobs:
               or registration_challenge_policy not in {
                   registration_challenge_control,
                   registration_challenge_rounds3,
+                  registration_challenge_rounds3_equivalent,
               }
               or release_mode != "cdp_up"
               or move_steps != 24
@@ -288,8 +327,9 @@ jobs:
               raise SystemExit(
                   "registration natural overlay requires natural10, "
                   "minimal_natural_hold, untouched exact5s controls, and either "
-                  "the one-round no-W0 control or the bounded bridge+force "
-                  "three-round challenge-generation treatment"
+                  "the one-round no-W0 control, the bounded bridge+force "
+                  "three-round treatment, or the no-W0 registration-equivalent "
+                  "three-round treatment"
               )
           if mode == "minimal_natural_hold" and registration_natural_overlay != "true":
               raise SystemExit(
@@ -320,13 +360,14 @@ jobs:
           print(f"natural W0 bridge={bridge}")
           print(f"natural force W0 after minus1={force_minus1}")
           print(f"natural server challenge rounds={rounds}")
+          print(f"natural same-challenge hold attempts={same_challenge_hold_attempts}")
           PY
 
       - name: Checkout private recovery control plane
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'ad83a0db5c90ee169f0d7c1f9de08c830a498b9c' }}
+          ref: ${{ inputs.recovery_source_ref || '064ae133edd94c6eccf1db41fe1b6407e0b4eb53' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -459,6 +500,36 @@ jobs:
             test "$(git -C "$runtime" rev-parse HEAD:protocol_runtime_probe.py)" = \
               'ab930a3c3b486dae9fda19b1f957cc8f989d8af6'
           fi
+
+      - name: Apply 875b057 pre-press guard overlay
+        if: steps.runner_egress.outputs.prepare == 'true' && env.REGISTRATION_NATURAL_OVERLAY == 'true' && (env.NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS == '2' || env.NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS == '3')
+        id: controller_guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$GITHUB_WORKSPACE/.production-human-runtime"
+          patch="$GITHUB_WORKSPACE/runtime_overlays/patchright_controller_875b057_pre_press_guard.patch"
+          test "$(git -C "$runtime" rev-parse HEAD:controllers/patchright_controller.py)" = \
+            'dbf139e1c63cdbabb08262b75c797244cddb4a15'
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:runtime_overlays/patchright_controller_875b057_pre_press_guard.patch)" = \
+            'aee6f1961e32eab6a37c17680411be2830fa578c'
+          test "$(sha256sum "$patch" | cut -d' ' -f1)" = \
+            '1ada0bb5f683a4d1066711e3a3c0649877b4bba08fc38e5c591b2a64b8c1694e'
+          git -C "$runtime" apply --ignore-space-change --check "$patch"
+          git -C "$runtime" apply --ignore-space-change "$patch"
+          test "$(git -C "$runtime" hash-object controllers/patchright_controller.py)" = \
+            '611136206efab10e7559a51f68d20acac581909c'
+          test "$(sha256sum "$runtime/controllers/patchright_controller.py" | cut -d' ' -f1)" = \
+            'b30c52d1fd96cbbbc201bfbf797046603ac9e21e842c881ebce6604fb0866149'
+          grep -Fq '_supports_hold_pre_press_guard = True' \
+            "$runtime/controllers/patchright_controller.py"
+          grep -Fq 'pre_press_guard_running' \
+            "$runtime/controllers/patchright_controller.py"
+          "$BOOTSTRAP_PYTHON" -m py_compile "$runtime/controllers/patchright_controller.py"
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+          echo "base_blob=dbf139e1c63cdbabb08262b75c797244cddb4a15" >> "$GITHUB_OUTPUT"
+          echo "derived_blob=611136206efab10e7559a51f68d20acac581909c" >> "$GITHUB_OUTPUT"
+          echo "derived_sha256=b30c52d1fd96cbbbc201bfbf797046603ac9e21e842c881ebce6604fb0866149" >> "$GITHUB_OUTPUT"
 
       - name: System dependencies
         if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'
@@ -922,6 +993,7 @@ jobs:
               --natural-hold-profile "$NATURAL_HOLD_PROFILE"
               --natural-final-proof-mode "$NATURAL_FINAL_PROOF_MODE"
               --natural-server-challenge-rounds "$NATURAL_SERVER_CHALLENGE_ROUNDS"
+              --natural-same-challenge-hold-attempts "$NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS"
             )
           fi
           bridge_args=()
@@ -1106,6 +1178,10 @@ jobs:
           COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
           RECOVERY_SOURCE_VERIFIED: ${{ steps.recovery_control.outputs.verified }}
           RECOVERY_SOURCE_COMMIT: ${{ steps.recovery_control.outputs.commit }}
+          CONTROLLER_GUARD_APPLIED: ${{ steps.controller_guard.outputs.applied }}
+          CONTROLLER_GUARD_BASE_BLOB: ${{ steps.controller_guard.outputs.base_blob }}
+          CONTROLLER_GUARD_DERIVED_BLOB: ${{ steps.controller_guard.outputs.derived_blob }}
+          CONTROLLER_GUARD_DERIVED_SHA256: ${{ steps.controller_guard.outputs.derived_sha256 }}
         run: |
           set -euo pipefail
           verdict_python="$VENV_PYTHON"
@@ -1156,11 +1232,19 @@ jobs:
               ),
               "registration_natural_one_shot": (
                   int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1) == 1
+                  and int(os.environ.get("NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS") or 1) == 1
                   if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
                   else None
               ),
               "registration_retry_budget_equivalent": (
-                  False
+                  int(os.environ.get("NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS") or 1) == 3
+                  and int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1) == 3
+                  and os.environ.get("RECOVERY_HUMAN_MODE") == "natural10"
+                  and os.environ.get("NATURAL_HOLD_PROFILE") == "registration_875b_one_shot"
+                  and os.environ.get("NATURAL_FINAL_PROOF_MODE") == "minimal_natural_hold"
+                  and os.environ.get("NATURAL_W0_BRIDGE") == "false"
+                  and os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "false"
+                  and os.environ.get("RECOVERY_RUNNER_LABEL") == "ubuntu-22.04"
                   if os.environ.get("REGISTRATION_NATURAL_OVERLAY") == "true"
                   else None
               ),
@@ -1174,6 +1258,21 @@ jobs:
               "natural_w0_bridge": os.environ.get("NATURAL_W0_BRIDGE") == "true",
               "natural_force_w0_after_minus1": os.environ.get("NATURAL_FORCE_W0_AFTER_MINUS1") == "true",
               "natural_server_challenge_rounds": int(os.environ.get("NATURAL_SERVER_CHALLENGE_ROUNDS") or 1),
+              "natural_same_challenge_hold_attempts": int(
+                  os.environ.get("NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS") or 1
+              ),
+              "natural_same_challenge_pre_press_guard_applied": (
+                  os.environ.get("CONTROLLER_GUARD_APPLIED") == "true"
+              ),
+              "natural_same_challenge_pre_press_guard_base_blob": (
+                  os.environ.get("CONTROLLER_GUARD_BASE_BLOB") or None
+              ),
+              "natural_same_challenge_pre_press_guard_derived_blob": (
+                  os.environ.get("CONTROLLER_GUARD_DERIVED_BLOB") or None
+              ),
+              "natural_same_challenge_pre_press_guard_derived_sha256": (
+                  os.environ.get("CONTROLLER_GUARD_DERIVED_SHA256") or None
+              ),
               "runner": os.environ.get("RECOVERY_RUNNER_LABEL") or None,
               "runner_egress_prepare": os.environ.get("RUNNER_EGRESS_PREPARE") == "true",
               "runner_egress_sha16": os.environ.get("RUNNER_EGRESS_SHA16") or None,
@@ -1191,6 +1290,7 @@ jobs:
               "lease_sha12": lease.get("lease_sha12") or None,
               "service_abuse_cleared": bool(runtime.get("service_abuse_cleared")),
               "graph_ok": bool(runtime.get("graph_ok")),
+              "production_writeback_attempted": bool(runtime.get("production_writeback_attempted")),
               "production_writeback_ok": bool(runtime.get("production_writeback_ok")),
               "production_health_enrolled": bool(runtime.get("production_health_enrolled")),
               "natural_strict_protocol_required": bool(runtime.get("natural_strict_protocol_required")),
@@ -1205,10 +1305,44 @@ jobs:
               "natural_tier_restore_success": bool(runtime.get("natural_tier_restore_success")),
               "natural_evidence_ordered": bool(runtime.get("natural_evidence_ordered")),
               "natural_holds_used": int(runtime.get("natural_holds_used") or 0),
+              "natural_registration_retry_equivalent": bool(
+                  runtime.get("natural_registration_retry_equivalent")
+              ),
+              "natural_same_challenge_second_hold_executed": bool(
+                  runtime.get("natural_same_challenge_second_hold_executed")
+              ),
+              "natural_same_challenge_second_hold_generation": runtime.get(
+                  "natural_same_challenge_second_hold_generation"
+              ),
+              "natural_same_challenge_second_hold_verify_count": runtime.get(
+                  "natural_same_challenge_second_hold_verify_count"
+              ),
+              "natural_same_challenge_second_hold_verify_request_count": runtime.get(
+                  "natural_same_challenge_second_hold_verify_request_count"
+              ),
+              "natural_same_challenge_third_hold_executed": bool(
+                  runtime.get("natural_same_challenge_third_hold_executed")
+              ),
+              "natural_same_challenge_third_hold_generation": runtime.get(
+                  "natural_same_challenge_third_hold_generation"
+              ),
+              "natural_same_challenge_third_hold_verify_count": runtime.get(
+                  "natural_same_challenge_third_hold_verify_count"
+              ),
+              "natural_same_challenge_third_hold_verify_request_count": runtime.get(
+                  "natural_same_challenge_third_hold_verify_request_count"
+              ),
               "writeback_post_refresh_token_present": bool(writeback.get("post_refresh_token_present")),
+              "completed": bool(completion.get("completed")),
               "outcome": completion.get("outcome") or None,
               "error_code": completion.get("error_code") or runtime.get("error_code") or "",
               "exhausted": bool(completion.get("exhausted")),
+              "outlook_operation_lease_released": bool(
+                  completion.get("outlook_operation_lease_released")
+              ),
+              "outlook_operation_lease_release_error": (
+                  completion.get("outlook_operation_lease_release_error") or ""
+              ),
           }
           out = Path(os.environ["RUNNER_TEMP"]) / "ga-auto-recovery-verdict.json"
           out.write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
