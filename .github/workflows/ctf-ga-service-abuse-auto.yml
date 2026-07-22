@@ -94,7 +94,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "87edd067c3c1c9ad5e0326a0f15c80adf8a61e81"
+        default: "fe7257fa99ee532e05d4d1588a656a8d4c2f6a70"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -148,7 +148,7 @@ jobs:
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
       NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS: ${{ inputs.natural_same_challenge_hold_attempts || '1' }}
-      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || '87edd067c3c1c9ad5e0326a0f15c80adf8a61e81' }}
+      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || 'fe7257fa99ee532e05d4d1588a656a8d4c2f6a70' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -367,7 +367,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '87edd067c3c1c9ad5e0326a0f15c80adf8a61e81' }}
+          ref: ${{ inputs.recovery_source_ref || 'fe7257fa99ee532e05d4d1588a656a8d4c2f6a70' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
