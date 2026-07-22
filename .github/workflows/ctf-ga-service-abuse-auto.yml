@@ -263,14 +263,18 @@ jobs:
                   "historical protocol overlay requires exact5s, cdp_up, 24 moves, "
                   "one hold, live XGhm, no newer force-W0 option, and eight server rounds"
               )
+          registration_challenge_policy = (bridge, force_minus1, rounds)
+          registration_challenge_control = ("false", "false", 1)
+          registration_challenge_rounds3 = ("true", "true", 3)
           if registration_natural_overlay == "true" and (
               historical_overlay != "false"
               or human_mode != "natural10"
               or natural_hold_profile != "registration_875b_one_shot"
               or mode != "minimal_natural_hold"
-              or bridge != "false"
-              or force_minus1 != "false"
-              or rounds != 1
+              or registration_challenge_policy not in {
+                  registration_challenge_control,
+                  registration_challenge_rounds3,
+              }
               or release_mode != "cdp_up"
               or move_steps != 24
               or hold_attempts != 1
@@ -279,8 +283,9 @@ jobs:
           ):
               raise SystemExit(
                   "registration natural overlay requires natural10, "
-                  "minimal_natural_hold, no W0 treatments, one server round, "
-                  "and untouched exact5s controls"
+                  "minimal_natural_hold, untouched exact5s controls, and either "
+                  "the one-round no-W0 control or the bounded bridge+force "
+                  "three-round challenge-generation treatment"
               )
           if mode == "minimal_natural_hold" and registration_natural_overlay != "true":
               raise SystemExit(
