@@ -101,6 +101,15 @@ Lease properties:
 Expired jobs consume an attempt and receive a technical cooldown instead of
 silently releasing an account into a duplicate runner.
 
+The adapter treats only an exact generic, unstructured 404 on the two
+idempotent lease routes as a transient routing failure. It closes the response,
+replaces the HTTP session so proxy cookies and pooled connections are dropped,
+and retries a bounded number of times with the identical payload and
+`request_id`. Structured `not_found`, `lease_*`, and other JSON errors remain
+terminal for that call. This is a client-side availability guard, not a
+replacement for one stable coordinator upstream and one authoritative lease
+database.
+
 ## Workflow
 
 Public execution workflow: `.github/workflows/ctf-ga-service-abuse-auto.yml`.
@@ -240,6 +249,35 @@ admitted slot should reach recovery.
   before the retry token could be consumed at pre-press, producing
   `NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED` with
   `natural_same_challenge_second_hold_executed=false`.
+
+### Canary evidence: runs 29961030766 and 29961192095
+
+Run `29961030766` is the online proof for the late-host adoption fix. Four
+egress-admitted slots acquired leases. Slot 4 completed the strict closed loop
+after one physical hold: delayed collector/real-final `0`, host continue, and
+TierRestore arrived while the controller was preparing a second hold, so the
+new guard adopted that success before another `mouse.down`. It recorded
+`natural_holds_used=1`, second/third hold `false`, ordered evidence, Graph,
+writeback, health enrollment, coordinator completion, and Outlook operation
+lease release. The other three admitted slots produced ordinary classified
+failures and also completed/released their leases.
+
+Run `29961192095` is an infrastructure-failure control, not a captcha sample.
+Twelve of 20 slots were rejected by the direct-egress denylist. The remaining
+eight passed egress admission, but all eight received the generic Flask
+"requested URL was not found" response from coordinator acquire. Their safe
+verdicts have `leased=false`, no account id, zero holds, and no browser,
+writeback, or completion activity. The checked-in coordinator does not emit
+that Flask response: its matching POST route returns structured JSON, including
+JSON 401 before body handling when authorization is absent.
+
+The failures clustered from `22:01:15` through `22:02:08` UTC. Earlier
+completion 404s also occurred just after `20:00` and `21:00`, while calls before
+and after those windows succeeded. This matches the separately measured
+roughly 75-second hourly nginx reconciliation window. The durable fix is an
+atomic/stable reverse-proxy deployment for `/ga-coordinator/`; Session rotation
+is only a bounded fallback and must not be interpreted as a captcha or IP-ban
+result.
 
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
