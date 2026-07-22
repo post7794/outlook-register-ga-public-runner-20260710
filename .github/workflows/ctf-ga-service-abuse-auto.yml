@@ -94,7 +94,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "e2ed2778db89f628699a4b018c8495f61d883c76"
+        default: "86ce32c3a89b48771f019f3ed49985e0986da710"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -148,7 +148,7 @@ jobs:
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
       NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS: ${{ inputs.natural_same_challenge_hold_attempts || '1' }}
-      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || 'e2ed2778db89f628699a4b018c8495f61d883c76' }}
+      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || '86ce32c3a89b48771f019f3ed49985e0986da710' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -367,7 +367,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || 'e2ed2778db89f628699a4b018c8495f61d883c76' }}
+          ref: ${{ inputs.recovery_source_ref || '86ce32c3a89b48771f019f3ed49985e0986da710' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -512,15 +512,15 @@ jobs:
           test "$(git -C "$runtime" rev-parse HEAD:controllers/patchright_controller.py)" = \
             'dbf139e1c63cdbabb08262b75c797244cddb4a15'
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD:runtime_overlays/patchright_controller_875b057_pre_press_guard.patch)" = \
-            'aee6f1961e32eab6a37c17680411be2830fa578c'
+            '3aa1ef8b58fd21c5671ac1c1d1c7665b8ee27cc2'
           test "$(sha256sum "$patch" | cut -d' ' -f1)" = \
-            '1ada0bb5f683a4d1066711e3a3c0649877b4bba08fc38e5c591b2a64b8c1694e'
+            '839649552bcd359f6e1f534834d7a52a318b464a1cbc0f7c88a2061e8a71b9bb'
           git -C "$runtime" apply --ignore-space-change --check "$patch"
           git -C "$runtime" apply --ignore-space-change "$patch"
           test "$(git -C "$runtime" hash-object controllers/patchright_controller.py)" = \
-            '611136206efab10e7559a51f68d20acac581909c'
+            '3427ce60ab7537a591785b889cda1931bde1587c'
           test "$(sha256sum "$runtime/controllers/patchright_controller.py" | cut -d' ' -f1)" = \
-            'b30c52d1fd96cbbbc201bfbf797046603ac9e21e842c881ebce6604fb0866149'
+            'afebdfce848a8d86d002cfa416d21fe67cf480fbf367a52fcc48a403c238211b'
           grep -Fq '_supports_hold_pre_press_guard = True' \
             "$runtime/controllers/patchright_controller.py"
           grep -Fq 'pre_press_guard_running' \
@@ -528,8 +528,8 @@ jobs:
           "$BOOTSTRAP_PYTHON" -m py_compile "$runtime/controllers/patchright_controller.py"
           echo "applied=true" >> "$GITHUB_OUTPUT"
           echo "base_blob=dbf139e1c63cdbabb08262b75c797244cddb4a15" >> "$GITHUB_OUTPUT"
-          echo "derived_blob=611136206efab10e7559a51f68d20acac581909c" >> "$GITHUB_OUTPUT"
-          echo "derived_sha256=b30c52d1fd96cbbbc201bfbf797046603ac9e21e842c881ebce6604fb0866149" >> "$GITHUB_OUTPUT"
+          echo "derived_blob=3427ce60ab7537a591785b889cda1931bde1587c" >> "$GITHUB_OUTPUT"
+          echo "derived_sha256=afebdfce848a8d86d002cfa416d21fe67cf480fbf367a52fcc48a403c238211b" >> "$GITHUB_OUTPUT"
 
       - name: System dependencies
         if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux'

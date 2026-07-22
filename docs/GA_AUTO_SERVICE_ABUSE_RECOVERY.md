@@ -173,7 +173,12 @@ a one-use token bound to the risk generation, verify request/response counters,
 and the monotonic failure count observed at issuance. Any later failure event
 invalidates the token before mouse-down. The token is checked again immediately
 before mouse-down, and the second and third confirmed mouse-downs are recorded
-separately in the safe verdict. The public runner applies the same narrow,
+separately in the safe verdict. The three-hold budget is a ceiling, not a
+requirement to reach the third hold: a strict success may finish after the
+first, second, or third physical hold once the ordered final/host/TierRestore
+and writeback checks close. A false second- or third-hold field is therefore
+expected when the state machine succeeds or fails closed before that press.
+The public runner applies the same narrow,
 hash-verified controller patch to the exact 875b057 runtime for both multi-hold
 arms; it does not replace that runtime with the current controller.
 
@@ -204,6 +209,37 @@ estimate.
   Slot 3 later completed through the same path with
   `outlook_operation_lease_released=true` and an empty release error, which
   supports treating the slot 1 404 as transient until reproduced otherwise.
+
+### Canary evidence: run 29956337508
+
+Run `29956337508` was a 20-slot registration-equivalent canary. It provides
+bounded physical-press and fail-closed evidence; it is not a claim that every
+admitted slot should reach recovery.
+
+- Twelve slots passed effective-egress admission and were leased. The other
+  eight slots were rejected by `direct_egress_denylist` before leasing.
+- Slots 13 and 17 completed the full strict closed loop on the first physical
+  hold (`natural_holds_used=1`); both
+  `natural_same_challenge_second_hold_executed` and
+  `natural_same_challenge_third_hold_executed` were `false`.
+- Slot 19 completed the full strict closed loop on the second physical hold
+  (`natural_holds_used=2`, second hold `true`, third hold `false`). Success
+  ended the state machine before a third press was needed.
+- Slot 7 executed the second hold, then hit a late-host race. It recorded
+  `natural_tier_restore_success=true`, but
+  `natural_host_continue=false`, `natural_evidence_ordered=false`, and
+  `strict_run_succeeded=false`; its outcome was the fail-closed
+  `NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED`. The third hold did not occur.
+- Slot 1 ended without a closed loop under
+  `RECOVERY_PROCESS_WATCHDOG_TIMEOUT`; its completion request also returned a
+  coordinator 404, so no successful completion or release was proven.
+- Six admitted slots (2, 3, 4, 10, 11, and 14) stopped after
+  `HUMAN_CAPTCHA_FAILURE_NO_RETRY` on the first hold. None recorded a second
+  physical hold.
+- Slot 18 failed closed when the monotonic HumanCaptcha failure count changed
+  before the retry token could be consumed at pre-press, producing
+  `NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED` with
+  `natural_same_challenge_second_hold_executed=false`.
 
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
@@ -383,13 +419,16 @@ outlook_operation_lease_released=true
 outlook_operation_lease_release_error=""
 ```
 
-For either same-challenge treatment, count only slots with
-`egress_admitted=true`, `leased=true`, and
-`natural_same_challenge_second_hold_executed=true` as experimental samples.
-The registration-equivalent arm additionally requires
-`natural_same_challenge_third_hold_executed=true` for a three-hold sample.
-Configured attempts or `natural_holds_used` alone do not prove that the
-generation-bound second or third mouse-down occurred.
+For either same-challenge treatment, start with slots where
+`egress_admitted=true` and `leased=true`, then use the execution fields to
+partition the physical-press evidence: both second/third fields `false` means
+the flow ended on the first hold; second `true` and third `false` means it
+ended on the second; both `true` means a third hold occurred. A strict success
+is valid in any of those three states; the configured budget does not require a
+third press. `natural_same_challenge_second_hold_executed` and
+`natural_same_challenge_third_hold_executed` prove only their respective
+generation-bound mouse-downs. Configured attempts or `natural_holds_used`
+alone do not prove that a corresponding physical press occurred.
 
 A `HumanCaptcha_Failure` in a safe artifact is not, by itself, proof that a
 retry hold was authorized. Only the exact registration-equivalent arm may
