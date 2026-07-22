@@ -137,10 +137,15 @@ verified automatic recovery, while retaining the natural 9.5-12.5s physical
 hold. The bridge may alter the iframe-facing final/W0 response sequence, so a
 collector `result|0` is only an intermediate signal; real
 `risk/verify state=continue` and `TierRestore` 2xx remain mandatory.
-When `natural_server_challenge_rounds` is above one, another hold is allowed
-only after the current round records collector `result|0` and a later real
-`risk/verify` response issues a new HumanCaptcha continuation. A `result|-1`,
-`HumanCaptcha_Failure`, or a plain visible iframe Retry never opens a round.
+When `natural_server_challenge_rounds` is above one, another server round is
+allowed only after the current round records collector `result|0` and a later
+real `risk/verify` response issues a new HumanCaptcha continuation. A
+`result|-1`, `HumanCaptcha_Failure`, or a plain visible iframe Retry never
+opens a fresh server round. The one exception is narrower and does not open a
+server round: the exact registration-equivalent same-challenge arm may scope
+the failure telemetry from the just-finished hold as expected retry evidence
+when the hold-scoped collector/real final is `-1` (or still absent) and the
+unchanged controller explicitly reports actionable `retry`.
 `natural_same_challenge_hold_attempts` is a separate outer-hold budget and
 defaults to `1`. Value `2` is accepted only for the registration-overlay
 natural10 bridge+force three-round treatment. It authorizes one second hold
@@ -155,14 +160,50 @@ disabled, a three-round hold budget, and `ubuntu-22.04`. The imported handler
 remains one-shot, while the outer state machine reproduces up to three physical
 holds with registration's motion, 9.5-12.5s hold envelope, first-hold warmup,
 and per-hold 16s proof wait. A stable live `result|-1` or no final can authorize
-the next same-challenge hold; `result|0`, a risk generation or verify-count
-change, host transition, HumanCaptcha success/failure, or `TierRestore` blocks
-it. Each retry uses a one-use token bound to the risk generation and verify
-request/response counters. The token is checked again immediately before
-mouse-down, and the second and third confirmed mouse-downs are recorded
+the next same-challenge hold. Only this exact arm may continue after a
+hold-scoped `HumanCaptcha_Failure`;
+the collector/real final must remain `-1` (or absent), and the controller
+must still report actionable `retry` on the unchanged challenge. The
+observed registration-shaped tuple is `-1 + HumanCaptcha_Failure + retry`.
+The ordinary one-shot and guarded W0 arms still fail closed on any
+`HumanCaptcha_Failure`; so does a failure with no `retry` state, a new failure
+after a retry token was issued, `result|0`, a risk generation or verify-count
+change, host transition, HumanCaptcha success, or `TierRestore`. Each retry uses
+a one-use token bound to the risk generation, verify request/response counters,
+and the monotonic failure count observed at issuance. Any later failure event
+invalidates the token before mouse-down. The token is checked again immediately
+before mouse-down, and the second and third confirmed mouse-downs are recorded
 separately in the safe verdict. The public runner applies the same narrow,
 hash-verified controller patch to the exact 875b057 runtime for both multi-hold
 arms; it does not replace that runtime with the current controller.
+
+### Canary evidence: run 29953150800
+
+Run `29953150800` was a three-slot registration-equivalent canary. It is
+evidence about retry-state handling, not an unblock success or a captcha-rate
+estimate.
+
+- Slot 1 passed egress admission and obtained a lease. The first hold produced
+  a live collector/real final `-1`, then `HumanCaptcha_Failure` and an iframe
+  Retry state. The run ended with `HUMAN_CAPTCHA_FAILURE_NO_RETRY` before a
+  second mouse-down (`natural_same_challenge_second_hold_executed=false`).
+  This is the pre-fix proof that a global sticky failure flag prevented the
+  registration-shaped retry sequence.
+- Slot 3 passed admission and obtained a lease. The first hold had no final;
+  the same-challenge guard entered the second-hold attempt/movement path, but
+  the log has no retry-token-consumed, mouse-down-confirmed, or holding-for
+  evidence. The later collector `result|0` and `HumanCaptcha_Success`
+  therefore cannot be attributed to a second physical press. The subsequent
+  `risk/verify` returned HTTP 403 and the process hit the watchdog
+  (`RECOVERY_PROCESS_WATCHDOG_TIMEOUT`) before host continue or TierRestore.
+  Its timeout-safe verdict correctly left the second-hold execution fields
+  false, so it is not a countable strict sample.
+- Slot 1's completion call also returned a transient coordinator 404. The
+  completion artifact was missing and did not prove operation-lease release;
+  this is a coordinator/cleanup observation independent of the captcha result.
+  Slot 3 later completed through the same path with
+  `outlook_operation_lease_released=true` and an empty release error, which
+  supports treating the slot 1 404 as transient until reproduced otherwise.
 
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
@@ -349,6 +390,12 @@ The registration-equivalent arm additionally requires
 `natural_same_challenge_third_hold_executed=true` for a three-hold sample.
 Configured attempts or `natural_holds_used` alone do not prove that the
 generation-bound second or third mouse-down occurred.
+
+A `HumanCaptcha_Failure` in a safe artifact is not, by itself, proof that a
+retry hold was authorized. Only the exact registration-equivalent arm may
+continue after the current hold when its scoped final is `-1` (or absent) and
+the unchanged challenge reports `retry`; all other failure events remain
+fail-closed for that run and may only be retried after the normal cooldown.
 
 Important categories remain separate:
 

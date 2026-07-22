@@ -94,7 +94,7 @@ on:
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
-        default: "064ae133edd94c6eccf1db41fe1b6407e0b4eb53"
+        default: "e2ed2778db89f628699a4b018c8495f61d883c76"
       egress_prefix_denylist:
         description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
         required: false
@@ -148,7 +148,7 @@ jobs:
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
       NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
       NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS: ${{ inputs.natural_same_challenge_hold_attempts || '1' }}
-      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || '064ae133edd94c6eccf1db41fe1b6407e0b4eb53' }}
+      RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || 'e2ed2778db89f628699a4b018c8495f61d883c76' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -367,7 +367,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.recovery_source_ref || '064ae133edd94c6eccf1db41fe1b6407e0b4eb53' }}
+          ref: ${{ inputs.recovery_source_ref || 'e2ed2778db89f628699a4b018c8495f61d883c76' }}
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -1061,28 +1061,43 @@ jobs:
           code=$?
           set -e
           if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
-            if [ ! -s "$safe" ]; then
-              SAFE="$safe" "$venv_python" - <<'PY'
+            SAFE="$safe" "$venv_python" - <<'PY'
           import json, os
           from pathlib import Path
 
-          Path(os.environ["SAFE"]).write_text(
-              json.dumps({
-                  "runner_completed": True,
-                  "run_succeeded": False,
-                  "result_present": False,
-                  "service_abuse_cleared": False,
-                  "graph_ok": False,
-                  "imap_ok": False,
-                  "production_writeback_attempted": False,
-                  "production_writeback_ok": False,
-                  "production_health_enrolled": False,
-                  "error_code": "RECOVERY_PROCESS_WATCHDOG_TIMEOUT",
-              }, ensure_ascii=False, indent=2),
+          path = Path(os.environ["SAFE"])
+          status = {}
+          if path.exists():
+              try:
+                  loaded = json.loads(path.read_text(encoding="utf-8"))
+                  if isinstance(loaded, dict):
+                      status = loaded
+              except (OSError, ValueError):
+                  status = {}
+          # A post-mouse-down checkpoint is valuable even when the watchdog
+          # kills the browser. Preserve its natural-hold fields, but make the
+          # terminal outcome explicit so completion cannot treat an in-progress
+          # marker as a successful recovery.
+          status.update({
+              "runner_completed": True,
+              "run_succeeded": False,
+              "result_present": False,
+              "service_abuse_cleared": False,
+              "graph_ok": False,
+              "imap_ok": False,
+              "production_writeback_attempted": False,
+              "production_writeback_ok": False,
+              "production_health_enrolled": False,
+              "error_code": "RECOVERY_PROCESS_WATCHDOG_TIMEOUT",
+          })
+          path.parent.mkdir(parents=True, exist_ok=True)
+          temp = path.with_name(path.name + ".watchdog.tmp")
+          temp.write_text(
+              json.dumps(status, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
+          temp.replace(path)
           PY
-            fi
           fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "safe_status=$safe" >> "$GITHUB_OUTPUT"
