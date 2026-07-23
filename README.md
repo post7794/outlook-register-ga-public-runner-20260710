@@ -7,9 +7,7 @@
 - 私钥保存在 Actions Secret `PRIVATE_SOURCE_DEPLOY_KEY`，不是普通 Repository Variable。
 - 私人仓库名和分支分别保存在变量 `PRIVATE_SOURCE_REPOSITORY`、`PRIVATE_SOURCE_REF`。
 - Deploy Key 在私人仓库中只有读取权限。
-- 各 workflow 按用途支持 `workflow_dispatch`；自动解封 workflow 另有受
-  `SERVICE_ABUSE_AUTO_ENABLED` 保护的 15 分钟 schedule，所有 workflow 均不使用
-  `pull_request_target`。
+- 工作流仅支持手动 `workflow_dispatch`，不使用 `pull_request_target`。
 - 不要把含 token 的订阅地址填写到公开的 workflow inputs；优先使用私人仓库中已提交的节点池文件。
 - 不要上传源码目录、`.git` 或包含密钥的文件作为 artifact。
 
@@ -19,12 +17,9 @@
 - `Build GA precompiled runtime cache`：一次性构建无密钥的 Python/Cloak/字体运行时 cache。
 - `CTF GA own IP pool probe`：从私人仓库检出源码后执行现有 GA matrix 测试；支持 `legacy` / `prebuilt` 环境。
 - `CTF GA target Graph healthy`：分批调用 own-IP workflow，直到累计达到目标 `Graph healthy` 数量或耗尽 slot 上限。
-- `CTF GA service-abuse auto`：从私人仓库检出固定源码，先做 egress admission，再执行受控的账号租赁、恢复、写回和清理；支持手动 batch 与 fail-closed schedule。
 
 预构建说明见 `docs/GA_PRECOMPILED_RUNTIME.md`。
 目标产出调度说明见 `docs/GA_TARGET_GRAPH_HEALTHY.md`。
-自动解封的状态机、验收字段和当前槽位配置见
-`docs/GA_AUTO_SERVICE_ABUSE_RECOVERY.md`。
 
 ## 当前私人源码配置
 
