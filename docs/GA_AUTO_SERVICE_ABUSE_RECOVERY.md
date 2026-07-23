@@ -104,11 +104,14 @@ silently releasing an account into a duplicate runner.
 The adapter treats only an exact generic, unstructured 404 on the two
 idempotent lease routes as a transient routing failure. It closes the response,
 replaces the HTTP session so proxy cookies and pooled connections are dropped,
-and retries a bounded number of times with the identical payload and
-`request_id`. Structured `not_found`, `lease_*`, and other JSON errors remain
-terminal for that call. This is a client-side availability guard, not a
-replacement for one stable coordinator upstream and one authoritative lease
-database.
+and retries five times with the identical payload and `request_id`, using
+`1/2/4/8/8` second backoff. The stale-route budget is independent from bounded
+transport and transient-HTTP retries, so an interleaved connection or
+`429/5xx` failure cannot consume it. Exhaustion is reported as
+`GA_COORDINATOR_ROUTE_UNAVAILABLE`. Structured `not_found`, `lease_*`, and
+other JSON errors remain terminal for that call. This is a client-side
+availability guard, not a replacement for one stable coordinator upstream and
+one authoritative lease database.
 
 ## Workflow
 
@@ -200,6 +203,13 @@ both scoped result streams are empty or `-1`. A scoped collector or real-final
 grace does not weaken the success rule: real final `0`, host
 `state=continue`, `humanCaptcha=false`, TierRestore 2xx, ordered evidence,
 Graph, writeback, health enrollment, and lease release are still mandatory.
+Before a second or third approach, the equivalent arm also pumps the browser
+for a bounded 12-second pre-approach settle while retaining the token's original
+failure baseline. A complete scoped real-final `0`, host continuation, and
+TierRestore is adopted without another press; a new failure or an unavailable
+proof read invalidates the token immediately. A proof-read exception is not
+downgraded to a normal empty stream; an actual no-result retry still requires
+the unchanged outer and pre-press guards.
 
 ### Canary evidence: run 29953150800
 
@@ -321,6 +331,28 @@ and one ended with the ordinary `HUMAN_CAPTCHA_FAILURE_NO_RETRY`; all admitted
 leases were released. This is the expected reason to keep the schedule at four
 fresh runners and to judge progress from redacted strict verdicts rather than
 workflow conclusion alone.
+
+The five 20-slot manual runs `29969795387`, `29970682421`, `29971248738`,
+`29972680304`, and `29973783290` form the pre-`c80d4f8` 100-job baseline.
+Fifty-eight runners were rejected by the egress denylist and 42 were admitted;
+eight admitted slots then hit the coordinator's generic acquire 404, leaving 34
+real leases. Of those, one was an explicit `LOGIN_RATE_LIMIT_IPBAN`. The
+non-IP strict rate is therefore `11/33 = 33.3%` (Wilson 95% interval about
+`19.8%-50.4%`), while nominal end-to-end yield is `11/100 = 11%`. The other
+leased outcomes were 18 `HUMAN_CAPTCHA_FAILURE_NO_RETRY`, two
+`BROWSER_FLOW_TIMEOUT`, one `NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED`, and one
+`RECOVERY_PROCESS_WATCHDOG_TIMEOUT`. Four of the 11 strict successes finished
+after a second hold, but that observed subset is not a randomized first-vs-
+second-hold comparison.
+
+Run `29979219354` is a post-promotion four-slot source canary using private
+source `c80d4f8`. Two slots were rejected before leasing; the other two obtained
+and released leases. Both real samples ended on the first hold with live final
+`-1`, `HumanCaptcha_Failure`, and `HUMAN_CAPTCHA_FAILURE_NO_RETRY`. It therefore
+has `0/2` strict successes, no explicit IP-ban, watchdog, coordinator-route
+failure, or second hold. The canary validates normal source/lease integration,
+but did not exercise the pre-approach late-success settle or the hourly generic-
+404 window; those remain separate validation targets.
 
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
