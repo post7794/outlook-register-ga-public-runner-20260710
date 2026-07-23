@@ -18,9 +18,6 @@
 - `CTF GA own IP pool probe`：从私人仓库检出源码后执行现有 GA matrix 测试；支持 `legacy` / `prebuilt` 环境。
 - `CTF GA target Graph healthy`：分批调用 own-IP workflow，直到累计达到目标 `Graph healthy` 数量或耗尽 slot 上限。
 
-预构建说明见 `docs/GA_PRECOMPILED_RUNTIME.md`。
-目标产出调度说明见 `docs/GA_TARGET_GRAPH_HEALTHY.md`。
-
 ## 当前私人源码配置
 
 仓库和分支由 GitHub Repository Variables 管理，修改时无需编辑 workflow。
