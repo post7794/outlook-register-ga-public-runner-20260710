@@ -12,8 +12,7 @@ fresh ubuntu-22.04 runner
 -> list only inactive/quarantined/service_abuse accounts
 -> atomically lease one account through ga-coordinator
 -> materialize credentials only in runner.temp (mode 0600)
--> production registration-natural treatment (9.5-12.5s per hold,
-   22s first-hold warmup, at most 3 generation-bound outer holds)
+-> production registration natural hold (9.5-12.5s, 22s warmup, one iframe attempt)
 -> TierRestore 2xx
 -> Graph Inbox 200
 -> OutlookEmail writeback + immediate health enrollment
@@ -22,15 +21,12 @@ fresh ubuntu-22.04 runner
 ```
 
 One matrix slot uses one fresh GitHub-hosted runner and at most one account.
-Ordinary manual runs default to `[1]`; a manual batch may supply up to 20
-unique slots and run them in parallel. Scheduled runs resolve
-`SERVICE_ABUSE_AUTO_SLOTS_JSON`: the live public value is currently
-`[1,2,3,4,5,6,7,8]`, with `[1,2,3,4]` as the workflow fallback. An account-level
-retry after a failed run must be a new dispatch and therefore receives a
-different GA runner/egress. The bounded same-challenge holds inside one run are
-not new coordinator attempts. The repository-wide concurrency group prevents
-separate workflow runs from overlapping, while per-slot request/run ids and
-the server lease prevent duplicate account work inside a matrix batch.
+Scheduled and ordinary manual runs default to the single slot `[1]`; a manual
+batch may supply up to 20 unique slots and run them in parallel. A retry must
+be a new dispatch and therefore receives a different GA runner/egress. The
+repository-wide concurrency group prevents separate workflow runs from
+overlapping, while per-slot request/run ids and the server lease prevent
+duplicate account work inside a matrix batch.
 
 `runner` defaults to `ubuntu-22.04`, including every scheduled run.  Manual
 experiments may select `windows-2022`; that path uses native Windows fonts and
@@ -467,41 +463,6 @@ bridge attempts reached `result|0`. The recovery release keeps that actual W0
 request pending until the final handler can resolve it, without changing the
 9.5-12.5s physical hold.
 
-## Registration boundary and failed copy-forward
-
-The recovery browser deliberately reuses the registration-natural hold and
-collector path, but the reusable boundary ends at the real collector final.
-The two host state machines are different:
-
-```text
-registration: new identity -> signup risk/verify -> HumanCaptcha -> CreateAccount
-recovery:     quarantined account -> login/recovery risk/verify -> HumanCaptcha
-              -> TierRestore -> Graph -> OutlookEmail writeback/health enrollment
-```
-
-The first recovery implementation copied the registration hold duration and
-warmup while keeping the old `final_proof_mode=off`. It reached 11 natural
-challenges and observed 11 real `result|-1` finals. The later exact5s treatment
-also recovered 0/6 fresh GA challenge slots. These are not equivalent
-registration treatments: the promoted path uses the hash-pinned registration
-overlay with `minimal_natural_hold`, then applies a recovery-specific
-`risk/verify` and `TierRestore` gate. A collector `result|0` or
-`HumanCaptcha_Success` is intermediate evidence, not an unblock proof.
-
-Registration can discard a failed signup session and create a new identity.
-Recovery must stay on the same account and quarantine generation. Its retry
-token therefore binds the risk generation, verify counters, and failure count;
-only the exact `result|-1` (or no final) plus unchanged actionable `retry`
-state may authorize another same-challenge hold. This fail-closed boundary is
-why a blanket copy of registration's retry loop is unsafe.
-
-The old recovery path also closed the browser before delayed host continuation
-and `TierRestore` responses arrived. Run `29962597677` recorded real
-`result|0` and `HumanCaptcha_Success`, but the zero-length post-hold watcher
-closed the context and produced `TargetClosedError`. The current bounded host
-grace and late-success adoption keep the recovery-specific asynchronous gate
-open without treating telemetry alone as success.
-
 The private repository retains the canonical recovery source and an equivalent
 workflow template, but its organization currently cannot allocate hosted
 runners because of an Actions billing restriction. Run `29446705922` was
@@ -527,11 +488,8 @@ be audited independently. Set `natural_final_proof_mode=minimal_natural_hold`
 with `registration_natural_overlay=true` for the registration-runtime arms,
 `ads_safe` for the recovery-shaped BFA treatment, or `off` for the prior
 live-payload control.
-Scheduled operation uses multiple fresh runners so a single denylisted GA
-egress cannot turn the whole interval into a no-sample run. The workflow
-fallback is four fresh runners (`[1,2,3,4]`), while the live public repository
-variable was raised to eight (`[1,2,3,4,5,6,7,8]`) at
-`2026-07-23T05:33:08Z`. Its
+Scheduled operation uses four fresh runners (`[1,2,3,4]`) so a single
+denylisted GA egress cannot turn the whole interval into a no-sample run. Its
 validated defaults are `registration_natural_overlay=true`,
 `natural_final_proof_mode=minimal_natural_hold`,
 `natural_server_challenge_rounds=3`,
@@ -540,8 +498,6 @@ validated defaults are `registration_natural_overlay=true`,
 leasing, so rejected runners consume no account attempt. The schedule reads
 the identical matrix and validation value from
 `SERVICE_ABUSE_AUTO_SLOTS_JSON`, with `[1,2,3,4]` as a fail-safe fallback.
-The private repository keeps `SERVICE_ABUSE_AUTO_ENABLED=false`; production
-scheduled execution is the public runner repository.
 
 Keep the two multi-hold mechanisms in separate dispatches:
 
@@ -559,28 +515,8 @@ writeback, and observation-group transition. Run `29966879042` met this gate
 for the promoted defaults.
 After validation run `29980436779` completed with every real lease released,
 `SERVICE_ABUSE_AUTO_ENABLED` was restored to `true` at
-`2026-07-23T05:00:27Z`; the current public scheduled matrix is the eight-slot
-`[1,2,3,4,5,6,7,8]` value above, with the four-slot workflow fallback retained.
-
-### Eight-slot throughput validation
-
-Run `29982735190` used the promoted source `85246e52681c3ff0a97c1c76111a75a67820b51a`
-and changed only the manual matrix size to eight slots. Six slots were
-rejected by `direct_egress_denylist`; two obtained and released real leases;
-one completed the strict closed loop after a second same-challenge hold and
-one ended as `NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED`. There was no IPBAN,
-watchdog, or coordinator route failure. The run is evidence about throughput
-and current fault handling, not a significant increase in CAPTCHA conversion
-(`1/2` non-IP samples is too small).
-
-Both leased artifacts reported `candidate_count=500` and `attempt_number=1`.
-The coordinator currently orders eligible candidates by lowest attempt count
-before last-attempt time, so a continuously replenished pool of untouched
-accounts can starve the documented attempt 2/3 budget. All observed recovery
-leases in the 100-job baseline, the 20-slot validation, and this eight-slot
-run were first attempts. Account-generation cumulative recovery therefore
-remains an open measurement; a reserved retry lane or an explicit retry-aware
-selection policy is required before claiming an eventual-account success rate.
+`2026-07-23T05:00:27Z`; scheduled operation remains the four-slot
+`[1,2,3,4]` matrix.
 
 Expected repository configuration:
 
