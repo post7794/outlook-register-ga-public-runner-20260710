@@ -313,6 +313,15 @@ retry mouse-down. No admitted slot recorded `TargetClosedError` or
 This run satisfies the manual promotion gate and is the evidence for making
 the four-slot registration-equivalent arm the scheduled production default.
 
+The first deployed-main smoke, `29968231739`, had all four slots rejected by
+the direct-egress gate before leasing. It is a zero-sample run, not a recovery
+failure. The follow-up deployed-main run, `29968293919`, admitted three slots:
+one completed the strict loop, one was classified `LOGIN_RATE_LIMIT_IPBAN`,
+and one ended with the ordinary `HUMAN_CAPTCHA_FAILURE_NO_RETRY`; all admitted
+leases were released. This is the expected reason to keep the schedule at four
+fresh runners and to judge progress from redacted strict verdicts rather than
+workflow conclusion alone.
+
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
 they can report `strict_run_succeeded`. A separate manual-only input,
