@@ -118,19 +118,21 @@ It checks out the pinned private recovery-control source from
 
 The browser/controller runtime is pinned to registration production commit
 `875b0571d5b9c88b89a5bbc64f30488ee9565962`. Recovery overlays the
-recovery protocol runtime blob
-`6213f5a531dad34491c7860e19a7ade985a302f7`; this retains registration's
-natural hold implementation while restoring the recovery-specific early-W0
-pending route. Both object ids are checked before account work. Recovery uses
-the same natural hold envelope and first-hold warmup, but deliberately keeps
-the imported handler at `hold_retries=1`;
+hash-pinned 875b057-derived protocol runtime blob
+`394e9e3bf62089ab3fc323152a6cbe693d883537` (SHA-256
+`faec4e4b068bd1a0be47d62806444d47d15252a3a1d7c9c0294f5ec0fcf7fd0a`).
+This retains registration's natural hold implementation while restoring the
+recovery-specific early-W0 pending route. Both object ids are checked before
+account work. Recovery uses the same natural hold envelope and first-hold
+warmup, but deliberately keeps the imported handler at `hold_retries=1`;
 Microsoft parent-page Retry remains bounded at two and iframe Retry is never
-clicked. `natural_final_proof_mode=minimal` also restores the registration
-path's narrow live PX561 normalizer; `off` retains the earlier timing-only
-recovery control. `ads_safe` is the recovery-shaped treatment that preserves
-and narrowly normalizes BFA/final telemetry. These final-proof modes do not
-rewrite the live PX561 collector result; the separately gated W0 treatments
-can alter only the iframe-facing W0 response. The accelerated
+clicked. The promoted registration-equivalent arm uses
+`natural_final_proof_mode=minimal_natural_hold`; `minimal` remains the older
+one-shot control and `off` retains the earlier timing-only recovery control.
+`ads_safe` is the recovery-shaped treatment that preserves and narrowly
+normalizes BFA/final telemetry. These final-proof modes do not rewrite the
+live PX561 collector result; the separately gated W0 treatments can alter
+only the iframe-facing W0 response. The accelerated
 5s path remains available for experiments but is not
 the automatic-recovery production path because it recovered 0/6 GA fresh
 challenge slots in the latest registration validation.
@@ -191,6 +193,14 @@ The public runner applies the same narrow,
 hash-verified controller patch to the exact 875b057 runtime for both multi-hold
 arms; it does not replace that runtime with the current controller.
 
+The registration-equivalent post-hold watcher remains immediate only while
+both scoped result streams are empty or `-1`. A scoped collector or real-final
+`0` opens a bounded 12-second host grace so an already in-flight
+`risk/verify` route and TierRestore can finish before browser cleanup. The
+grace does not weaken the success rule: real final `0`, host
+`state=continue`, `humanCaptcha=false`, TierRestore 2xx, ordered evidence,
+Graph, writeback, health enrollment, and lease release are still mandatory.
+
 ### Canary evidence: run 29953150800
 
 Run `29953150800` was a three-slot registration-equivalent canary. It is
@@ -250,7 +260,7 @@ admitted slot should reach recovery.
   `NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED` with
   `natural_same_challenge_second_hold_executed=false`.
 
-### Canary evidence: runs 29961030766 and 29961192095
+### Canary evidence: runs 29961030766, 29961192095, and 29962597677
 
 Run `29961030766` is the online proof for the late-host adoption fix. Four
 egress-admitted slots acquired leases. Slot 4 completed the strict closed loop
@@ -278,6 +288,30 @@ roughly 75-second hourly nginx reconciliation window. The durable fix is an
 atomic/stable reverse-proxy deployment for `/ga-coordinator/`; Session rotation
 is only a bounded fallback and must not be interpreted as a captcha or IP-ban
 result.
+
+Run `29962597677` isolated a browser-lifecycle race. Its first hold produced a
+real collector final `0` and `HumanCaptcha_Success`, while the post-captcha
+`risk/verify` route was still in flight. The zero-second registration-equivalent
+watcher failed closed and cleaned up the browser, causing the route to end with
+`TargetClosedError` after about 4.4 seconds. This is premature cleanup, not an
+IP-ban or CAPTCHA-parameter difference. The result-aware grace above fixes
+that boundary without accepting `result|0` by itself.
+
+### Promotion evidence: run 29966879042
+
+Run `29966879042` used private source `b35a6aa` with four GA-owned-IP slots.
+One slot was rejected by the direct-egress denylist before leasing. All three
+admitted slots acquired distinct leases and completed the strict production
+loop: real final `0`, host continue, TierRestore, ordered evidence, Graph,
+writeback, health enrollment, coordinator completion, and Outlook operation
+lease release were all true. Slots 2 and 4 finished after one physical hold;
+slot 1 finished after two. Slot 2 exercised the new 12-second grace with a
+5.3-second `risk/verify` delay. Slot 4 exercised late-host adoption before a
+retry mouse-down. No admitted slot recorded `TargetClosedError` or
+`NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED`.
+
+This run satisfies the manual promotion gate and is the evidence for making
+the four-slot registration-equivalent arm the scheduled production default.
 
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
@@ -395,13 +429,16 @@ be audited independently. Set `natural_final_proof_mode=minimal_natural_hold`
 with `registration_natural_overlay=true` for the registration-runtime arms,
 `ads_safe` for the recovery-shaped BFA treatment, or `off` for the prior
 live-payload control.
-Keep the defaults `[1]`, `minimal`, `natural_w0_bridge=false`, and
-`natural_force_w0_after_minus1=false` for scheduled operation;
-`natural_server_challenge_rounds` and
-`natural_same_challenge_hold_attempts` also default to `1`, and
-`recovery_network_mode` remains `ga_own_ip`. Use `2` only for the guarded
-W0/fresh-round treatment and `3` only for the registration-equivalent arm
-until either treatment proves the complete TierRestore/writeback loop.
+Scheduled operation uses four fresh runners (`[1,2,3,4]`) so a single
+denylisted GA egress cannot turn the whole interval into a no-sample run. Its
+validated defaults are `registration_natural_overlay=true`,
+`natural_final_proof_mode=minimal_natural_hold`,
+`natural_server_challenge_rounds=3`,
+`natural_same_challenge_hold_attempts=3`, both W0 options disabled, and
+`recovery_network_mode=ga_own_ip`. The egress gate still runs before account
+leasing, so rejected runners consume no account attempt. The schedule reads
+the identical matrix and validation value from
+`SERVICE_ABUSE_AUTO_SLOTS_JSON`, with `[1,2,3,4]` as a fail-safe fallback.
 
 Keep the two multi-hold mechanisms in separate dispatches:
 
@@ -415,12 +452,15 @@ Both require `registration_natural_overlay=true`, `natural10`,
 
 Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,
-writeback, and observation-group transition.
+writeback, and observation-group transition. Run `29966879042` met this gate
+for the promoted defaults.
 
 Expected repository configuration:
 
 ```text
 variable GA_COORDINATOR_URL
+variable SERVICE_ABUSE_AUTO_ENABLED
+variable SERVICE_ABUSE_AUTO_SLOTS_JSON
 secret   GA_COORDINATOR_TOKEN
 secret   OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64
 secret   SERVICE_ABUSE_EXPERIMENT_KEY

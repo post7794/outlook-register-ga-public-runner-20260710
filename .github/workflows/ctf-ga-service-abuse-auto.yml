@@ -24,9 +24,9 @@ on:
         required: true
         default: "500"
       job_slots_json:
-        description: "Bounded fresh-runner slots; use [1] normally or [1..20] for a batch"
+        description: "Bounded fresh-runner slots; production uses four slots to survive denied GA egress"
         required: true
-        default: "[1]"
+        default: "[1,2,3,4]"
       recovery_network_mode:
         description: "Microsoft transport: direct GA runner egress or isolated curated proxy pool"
         required: true
@@ -48,9 +48,9 @@ on:
         required: true
         default: "false"
       registration_natural_overlay:
-        description: "Use the byte-exact 875b057 thin-natural registration protocol"
+        description: "Use the hash-pinned 875b057-derived thin-natural registration protocol"
         required: true
-        default: "false"
+        default: "true"
       exact5s_release_mode:
         description: "Exact5s release backend: historical cdp_up control or paired page_up treatment"
         required: true
@@ -74,7 +74,7 @@ on:
       natural_final_proof_mode:
         description: "Natural-hold final PX561 treatment: minimal_natural_hold, minimal, ads_safe, or off"
         required: true
-        default: "minimal"
+        default: "minimal_natural_hold"
       natural_w0_bridge:
         description: "Exercise the verified neutral-final to W0 bridge while keeping a natural 10s hold"
         required: true
@@ -86,11 +86,11 @@ on:
       natural_server_challenge_rounds:
         description: "Maximum natural hold/server-challenge budget (1-8); fresh rounds still require accepted result|0"
         required: true
-        default: "1"
+        default: "3"
       natural_same_challenge_hold_attempts:
         description: "Maximum outer holds for the same rendered natural challenge (1-3); 2 is bridge+force and 3 is registration-equivalent"
         required: true
-        default: "1"
+        default: "3"
       recovery_source_ref:
         description: "Pinned private recovery-control source commit"
         required: true
@@ -117,7 +117,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        slot: ${{ fromJSON(inputs.job_slots_json || '[1]') }}
+        slot: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.job_slots_json || vars.SERVICE_ABUSE_AUTO_SLOTS_JSON || '[1,2,3,4]') }}
     runs-on: ${{ inputs.runner || 'ubuntu-22.04' }}
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
     env:
@@ -135,19 +135,19 @@ jobs:
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
       HISTORICAL_PROTOCOL_OVERLAY: ${{ inputs.historical_protocol_overlay || 'false' }}
-      REGISTRATION_NATURAL_OVERLAY: ${{ inputs.registration_natural_overlay || 'false' }}
+      REGISTRATION_NATURAL_OVERLAY: ${{ inputs.registration_natural_overlay || 'true' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
       EXACT5S_RELEASE_MODE: ${{ inputs.exact5s_release_mode || 'cdp_up' }}
       EXACT5S_MOVE_STEPS: ${{ inputs.exact5s_move_steps || '24' }}
       EXACT5S_HOLD_ATTEMPTS: ${{ inputs.exact5s_hold_attempts || '1' }}
       EXACT5S_FINAL_XGHM_TARGET: ${{ inputs.exact5s_final_xghm_target || '0' }}
       EXACT5S_FINAL_XGHM_START_INDEX: ${{ inputs.exact5s_final_xghm_start_index || '1' }}
-      NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal' }}
-      NATURAL_HOLD_PROFILE: ${{ inputs.registration_natural_overlay == 'true' && 'registration_875b_one_shot' || 'registration_10s' }}
+      NATURAL_FINAL_PROOF_MODE: ${{ inputs.natural_final_proof_mode || 'minimal_natural_hold' }}
+      NATURAL_HOLD_PROFILE: ${{ (inputs.registration_natural_overlay || 'true') == 'true' && 'registration_875b_one_shot' || 'registration_10s' }}
       NATURAL_W0_BRIDGE: ${{ inputs.natural_w0_bridge || 'false' }}
       NATURAL_FORCE_W0_AFTER_MINUS1: ${{ inputs.natural_force_w0_after_minus1 || 'false' }}
-      NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '1' }}
-      NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS: ${{ inputs.natural_same_challenge_hold_attempts || '1' }}
+      NATURAL_SERVER_CHALLENGE_ROUNDS: ${{ inputs.natural_server_challenge_rounds || '3' }}
+      NATURAL_SAME_CHALLENGE_HOLD_ATTEMPTS: ${{ inputs.natural_same_challenge_hold_attempts || '3' }}
       RECOVERY_SOURCE_REF: ${{ inputs.recovery_source_ref || 'b35a6aafe19d62ae6b5371ce73158bfa8e4d4c7e' }}
     steps:
       - name: Reject GitHub UI re-runs
@@ -166,7 +166,7 @@ jobs:
       - name: Validate bounded recovery matrix
         shell: bash
         env:
-          JOB_SLOTS_JSON: ${{ inputs.job_slots_json || '[1]' }}
+          JOB_SLOTS_JSON: ${{ github.event_name == 'workflow_dispatch' && inputs.job_slots_json || vars.SERVICE_ABUSE_AUTO_SLOTS_JSON || '[1,2,3,4]' }}
         run: |
           set -euo pipefail
           "$BOOTSTRAP_PYTHON" - <<'PY'
