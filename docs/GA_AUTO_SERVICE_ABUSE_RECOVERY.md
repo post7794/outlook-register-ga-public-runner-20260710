@@ -354,6 +354,24 @@ failure, or second hold. The canary validates normal source/lease integration,
 but did not exercise the pre-approach late-success settle or the hourly generic-
 404 window; those remain separate validation targets.
 
+Run `29980436779` is the 20-slot validation cohort on public head
+`6eb98141` and private source `85246e52681c3ff0a97c1c76111a75a67820b51a`.
+Ten runners passed egress admission and all ten obtained and released leases;
+the other ten were rejected before leasing. Eight admitted slots were non-IP
+valid samples, with three strict successes (`3/8 = 37.5%`, Wilson 95% interval
+about `13.7%-69.4%`) and two explicit `LOGIN_RATE_LIMIT_IPBAN` outcomes. The
+successes were one first-hold slot, one second same-challenge hold, and another
+first-hold slot; every one closed Graph, writeback, health enrollment,
+coordinator completion, and operation-lease release. The remaining non-IP
+leases were four `HUMAN_CAPTCHA_FAILURE_NO_RETRY` and one
+`NATURAL_SAME_CHALLENGE_RETRY_INVALIDATED`. The latter invalidated its token at
+`pre_approach_settle` when a later failure count arrived, before a second
+mouse-down. There were no watchdogs, generic coordinator 404s, or
+`GA_COORDINATOR_ROUTE_UNAVAILABLE` outcomes. This cohort did not observe late-
+success adoption or an hourly 404 window, so those behaviors remain covered by
+focused tests. Its non-IP rate must not be pooled into the pre-fix `11/33`
+baseline.
+
 The default strict rule for ordinary one-shot runs remains unchanged. Both
 multi-hold arms require ordered real-final/host/TierRestore evidence before
 they can report `strict_run_succeeded`. A separate manual-only input,
@@ -495,6 +513,10 @@ Keep the variable `false` during deployment and smoke validation. Enable it
 only after one manually dispatched run proves the entire lease, recovery,
 writeback, and observation-group transition. Run `29966879042` met this gate
 for the promoted defaults.
+After validation run `29980436779` completed with every real lease released,
+`SERVICE_ABUSE_AUTO_ENABLED` was restored to `true` at
+`2026-07-23T05:00:27Z`; scheduled operation remains the four-slot
+`[1,2,3,4]` matrix.
 
 Expected repository configuration:
 
