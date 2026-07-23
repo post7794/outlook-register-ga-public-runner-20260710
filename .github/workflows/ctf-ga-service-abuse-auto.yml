@@ -175,13 +175,13 @@ jobs:
           current = int(os.environ["RECOVERY_SLOT"])
           valid = (
               isinstance(slots, list)
-              and 1 <= len(slots) <= 20
-              and all(type(item) is int and 1 <= item <= 20 for item in slots)
+              and 1 <= len(slots) <= 100
+              and all(type(item) is int and 1 <= item <= 100 for item in slots)
               and len(set(slots)) == len(slots)
               and current in slots
           )
           if not valid:
-              raise SystemExit("job_slots_json must contain 1-20 unique integer slots in range 1..20")
+              raise SystemExit("job_slots_json must contain 1-100 unique integer slots in range 1..100")
           source_ref = os.environ.get("RECOVERY_SOURCE_REF", "")
           if not re.fullmatch(r"[0-9a-f]{40}", source_ref):
               raise SystemExit("recovery_source_ref must be an exact lowercase 40-hex commit")
