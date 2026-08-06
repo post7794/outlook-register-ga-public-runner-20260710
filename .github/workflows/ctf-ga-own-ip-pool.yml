@@ -552,7 +552,10 @@ jobs:
           coordinator_reason = ""
           coord_url = os.environ.get("GA_COORDINATOR_URL", "").rstrip("/")
           coord_token = os.environ.get("GA_COORDINATOR_TOKEN", "")
-          if not matched and ip and coord_url and coord_token:
+          # A proxy-mode job has not started mihomo yet, so this IP is only the
+          # carrier GA runner and is not visible to the target. Applying the
+          # direct-egress denylist here would discard valid proxy pool slots.
+          if not matched and data["network_mode"] != "proxy_pool" and ip and coord_url and coord_token:
               import urllib.request, urllib.error
               check_url = f"{coord_url}/v1/egress/check?ip={ip}"
               req = urllib.request.Request(check_url, headers={
@@ -905,7 +908,9 @@ jobs:
           test -n "$generated"
           cp "$generated" config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json
           python3 - <<'PY'
+          import hashlib
           import json
+          import os
           from pathlib import Path
           p = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json")
           data = json.loads(p.read_text(encoding="utf-8"))
@@ -1064,6 +1069,10 @@ jobs:
           selected["proxy_public_ip"] = proxy_ip
           selected["proxy_ready"] = bool(proxy_ip)
           Path("Results/diagnostics/ga_proxy_egress.json").write_text(json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8")
+          if proxy_ip and os.environ.get("GITHUB_ENV"):
+              lane = "egress-v1:" + hashlib.sha256(proxy_ip.encode("utf-8")).hexdigest()[:20]
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+                  f.write(f"GA_COORDINATOR_LANE={lane}\n")
           print(json.dumps({"proxy_ready": bool(proxy_ip), "proxy_public_ip": proxy_ip, "selected_index": selected.get("selected_index"), "selected_name": selected.get("selected_name")}, ensure_ascii=False))
           PY
           cat Results/diagnostics/ga_proxy_egress.json
