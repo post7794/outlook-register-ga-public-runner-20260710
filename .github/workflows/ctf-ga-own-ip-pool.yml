@@ -206,6 +206,7 @@ jobs:
       PYTHONIOENCODING: utf-8
       CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
       CTF_PROXY_SUBSCRIPTION_URL: ${{ secrets.CTF_PROXY_SUBSCRIPTION_URL }}
+      CTF_REG_PROXY_POOL_GZIP_B64: ${{ secrets.CTF_REG_PROXY_POOL_GZIP_B64 }}
       ADS_PROFILE_API_URL: ${{ secrets.ADS_PROFILE_API_URL }}
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
       OUTLOOK_REAL_FINAL_PRIMARY_VARIANT: ${{ inputs.primary_final_variant }}
@@ -990,9 +991,10 @@ jobs:
           PY
 
       - name: Start subscription proxy
-        if: ${{ inputs.network_mode == 'proxy_pool' && steps.egress.outputs.should_probe != 'false' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
+        if: ${{ inputs.network_mode == 'proxy_pool' && steps.egress.outputs.should_probe != 'false' && (env.CTF_REG_PROXY_POOL_GZIP_B64 != '' || env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
         shell: bash
         env:
+          REG_PROXY_POOL_GZIP_B64: ${{ env.CTF_REG_PROXY_POOL_GZIP_B64 }}
           PROXY_SUBSCRIPTION_URL: ${{ env.CTF_PROXY_SUBSCRIPTION_URL }}
           PROXY_POOL_FILE: ${{ inputs.proxy_pool_file }}
         run: |
@@ -1000,7 +1002,24 @@ jobs:
           mkdir -p Results/diagnostics .mihomo-ga
           . .venv/bin/activate
           source_args=()
-          if [ -n "$PROXY_SUBSCRIPTION_URL" ]; then
+          if [ -n "$REG_PROXY_POOL_GZIP_B64" ]; then
+            export REG_PROXY_POOL_GZIP_B64
+            decoded_pool="$RUNNER_TEMP/ga-registration-proxy-pool.yaml"
+            export decoded_pool
+            python3 - <<'PY'
+          import base64
+          import gzip
+          import os
+          from pathlib import Path
+
+          encoded = os.environ.get("REG_PROXY_POOL_GZIP_B64", "").strip()
+          raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+          if not raw or len(raw) > 2_000_000:
+              raise SystemExit("invalid compressed registration proxy pool")
+          Path(os.environ["decoded_pool"]).write_bytes(raw)
+          PY
+            source_args=(--config "$decoded_pool")
+          elif [ -n "$PROXY_SUBSCRIPTION_URL" ]; then
             source_args=(--url "$PROXY_SUBSCRIPTION_URL")
           else
             test -f "$PROXY_POOL_FILE"
