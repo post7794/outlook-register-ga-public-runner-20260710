@@ -1061,7 +1061,9 @@ jobs:
           done
           proxy_ip="$(cat Results/diagnostics/proxy_public_ip.txt 2>/dev/null || true)"
           python - <<'PY'
+          import hashlib
           import json
+          import os
           from pathlib import Path
           selected = {}
           try:
