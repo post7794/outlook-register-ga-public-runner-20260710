@@ -330,7 +330,6 @@ def summarize_verdicts(
         "coordinator_final_gap_ms": gaps,
         "observed_config": {
             "variant": unique_values(rows, "variant"),
-            "ads_profile_policy": unique_values(rows, "ads_profile_policy"),
             "fresh_session_restart_policy": unique_values(
                 rows, "fresh_session_restart_policy"
             ),
