@@ -259,6 +259,24 @@ jobs:
           assert '"hold_retries": 3' in config
           PY
 
+      - name: Verify security-email binding wiring
+        if: ${{ always() && (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') }}
+        shell: bash
+        env:
+          SECURITY_EMAIL_BINDING_CHECK: ${{ (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') && '1' || '' }}
+          SECURITY_MAIL_API_KEY_CHECK: ${{ (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') && secrets.SECURITY_MAIL_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          fail() { echo "wiring check failed: $1" >&2; exit 2; }
+          test "${SECURITY_EMAIL_BINDING_CHECK:-}" = "1" || fail "security-email switch not enabled for ${{ inputs.variant }}"
+          test -n "${SECURITY_MAIL_API_KEY_CHECK:-}" || fail "SECURITY_MAIL_API_KEY secret is not available to this job"
+          test -f security_email_binding_hook.py || fail "hook module missing from the pinned source"
+          test -f tools/security_email_binding.py || fail "binding library missing from the pinned source"
+          grep -q 'security_email_binding_hook' protocol_runtime_probe.py || fail "probe does not install the hook"
+          grep -q 'SECURITY_EMAIL_BINDING' protocol_runtime_probe.py || fail "probe switch is missing"
+          grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py || fail "fresh-rechallenge budget parser missing"
+          echo "wiring ok (existence only): switch=1 key_present=yes hook=yes resume_parser=yes"
+
       - name: Verify same-session OAuth smoke source
         if: ${{ inputs.variant == 'same_session_oauth_smoke' }}
         shell: bash
