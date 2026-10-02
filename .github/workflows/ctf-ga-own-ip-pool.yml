@@ -864,8 +864,8 @@ jobs:
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
           OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'same_session_oauth_security_email_fresh1' && '1' || (inputs.variant == 'same_session_oauth_smoke' || inputs.variant == 'same_session_oauth_sunbrowser' || inputs.variant == 'same_session_oauth_security_email') && '0' || '' }}
           OUTLOOK_SAME_SESSION_OAUTH: "1"
-          SECURITY_EMAIL_BINDING: ${{ inputs.variant == 'same_session_oauth_security_email' && '1' || '' }}
-          SECURITY_MAIL_API_KEY: ${{ inputs.variant == 'same_session_oauth_security_email' && secrets.SECURITY_MAIL_API_KEY || '' }}
+          SECURITY_EMAIL_BINDING: ${{ (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') && '1' || '' }}
+          SECURITY_MAIL_API_KEY: ${{ (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') && secrets.SECURITY_MAIL_API_KEY || '' }}
           FRESH_SESSION_RESTART_POLICY: ${{ inputs.fresh_session_restart_policy }}
         run: |
           set +e
