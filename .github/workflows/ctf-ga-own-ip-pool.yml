@@ -1,4 +1,4 @@
-name: CTF GA own IP pool probe
+name: CTF WARP bounded 20-slot experiment
 
 on:
   workflow_dispatch:
@@ -197,6 +197,26 @@ jobs:
       GA_COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
       GA_COORDINATOR_SLOT: ${{ matrix.attempt }}
     steps:
+      - name: Lock one authorized WARP 20-slot batch
+        shell: bash
+        env:
+          ACTUAL_INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          expected = json.loads('{"node_slots_json": "[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]", "orchestration_id": "warp20-20261006-fixed-once", "fresh_session_restart_policy": "off", "network_mode": "ga_own_ip", "variant": "same_session_oauth_security_email_fresh1", "runner": "ubuntu-22.04", "timeout_minutes": "35", "probe_timeout_minutes": "12", "fresh_absolute_timeout_seconds": "60", "per_ip_max_registrations": "1", "egress_prefix_denylist": "4.,13.,20.,40.,52.,68.,74.249.", "pre_first_hold_warmup_ms": "", "pre_first_hold_warmup_policy": "fixed_input", "signup_country_policy": "source_default", "signup_dob_policy": "source_default", "email_domain_policy": "source_default", "slot_stagger_seconds": "12", "coordinator_mode": "final_only", "max_parallel": "20", "runtime_mode": "legacy", "runtime_cache_revision": "v1", "stop_on_rechallenge": "0", "primary_final_variant": "", "proxy_pool_file": "", "ingest_metadata": "group_id=2856339019;tag_ids=2125410490"}')
+          actual = json.loads(os.environ['ACTUAL_INPUTS'])
+          assert not set(actual) - set(expected), 'Unexpected input key'
+          for key, value in expected.items():
+              if value == '' and key not in actual: actual[key] = ''
+          assert actual == expected, 'Experiment inputs changed'
+          assert os.environ['GITHUB_RUN_ATTEMPT'] == '1', 'No reruns authorized'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/exp/warp20-20261006-fixed'
+          assert int(os.environ['GA_COORDINATOR_SLOT']) in range(1, 21)
+          print('Bounded WARP experiment: 20 slots, one session each, no automatic repeats')
+          PY
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -363,7 +383,181 @@ jobs:
           grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
           grep -q 'minimal_natural_hold' protocol_runtime_probe.py
 
-      # Capture egress + denylist BEFORE heavy setup/stagger so bad prefixes exit in ~1 min.
+      - name: Install pinned WARP and lock runner egress
+        id: warp
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .warp20 Results/diagnostics
+          cat > .warp20/check_egress.py <<'WARP20_PY'
+          """Network-only evidence; never accesses signup endpoints, cookies or accounts."""
+          import hashlib
+          import ipaddress
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          ROOT = Path('.warp20')
+          IFACE = 'CloudflareWARP'
+          CHAIN = 'CTF_WARP20'
+
+
+          def command(args):
+              r = subprocess.run(args, capture_output=True, text=True, timeout=25)
+              if r.returncode:
+                  raise RuntimeError('network_command_failed:' + Path(args[0]).name)
+              return r.stdout.strip()
+
+
+          def get(url):
+              return command(['curl', '-4', '--noproxy', '*', '-fsS', '--connect-timeout', '8', '--max-time', '18', url])
+
+
+          def parse_trace(text):
+              pairs = [line.split('=', 1) for line in text.splitlines() if '=' in line]
+              keys = [key for key, _ in pairs]
+              if len(keys) != len(set(keys)):
+                  raise ValueError('duplicate_trace_field')
+              return dict(pairs)
+
+
+          def valid_ip(value):
+              addr = ipaddress.ip_address(value)
+              if addr.version != 4 or not addr.is_global:
+                  raise ValueError('not_public_ipv4')
+              return str(addr)
+
+
+          def validate(snapshot, direct_ip, expected_ip=None):
+              valid_ip(snapshot['ip'])
+              valid_ip(direct_ip)
+              valid_ip(snapshot['trace_ip'])
+              if snapshot['warp'] not in ('on', 'plus'):
+                  raise ValueError('warp_not_on')
+              if snapshot['ip'] == direct_ip:
+                  raise ValueError('unchanged_ipify_egress')
+              if expected_ip and snapshot['ip'] != expected_ip:
+                  raise ValueError('ipify_egress_changed_during_session')
+              if snapshot['interface'] != IFACE:
+                  raise ValueError('unexpected_route_interface')
+              if snapshot['firewall4'] is not True or snapshot['firewall6'] is not True:
+                  raise ValueError('firewall_not_locked')
+              return True
+
+
+          def fingerprint(value):
+              return hashlib.sha256(value.encode()).hexdigest()
+
+
+          def save(name, data):
+              ROOT.mkdir(exist_ok=True)
+              (ROOT / name).write_text(json.dumps(data, indent=2), encoding='utf-8')
+
+
+          def main(phase):
+              if phase not in ('direct', 'ready', 'before', 'after'):
+                  raise ValueError('invalid_phase')
+              result = {'phase': phase, 'slot': int(os.environ['GA_COORDINATOR_SLOT']),
+                        'egress_transport': 'cloudflare_warp_masque', 'valid': False}
+              try:
+                  ip = valid_ip(get('https://api.ipify.org'))
+                  if phase == 'direct':
+                      save('direct.private.json', {'ip': ip})
+                      result.update(valid=True, ipify_sha256=fingerprint(ip))
+                  else:
+                      trace = parse_trace(get('https://www.cloudflare.com/cdn-cgi/trace'))
+                      route = json.loads(command(['ip', '-j', '-4', 'route', 'get', '1.1.1.1', 'uid', str(os.getuid())]))
+                      snap = {'ip': ip, 'trace_ip': trace.get('ip', ''), 'warp': trace.get('warp', ''),
+                              'interface': route[0].get('dev'), 'firewall4': False, 'firewall6': False}
+                      for binary, key in (('iptables', 'firewall4'), ('ip6tables', 'firewall6')):
+                          command(['sudo', binary, '-w', '5', '-C', 'OUTPUT', '-m', 'owner', '--uid-owner', str(os.getuid()), '-j', CHAIN])
+                          for args in (['-o', 'lo', '-j', 'ACCEPT'], ['-o', IFACE, '-j', 'ACCEPT'], ['-j', 'REJECT']):
+                              command(['sudo', binary, '-w', '5', '-C', CHAIN, *args])
+                          snap[key] = True
+                      direct = json.loads((ROOT / 'direct.private.json').read_text())['ip']
+                      expected = json.loads((ROOT / 'ready.private.json').read_text())['ip'] if phase != 'ready' else None
+                      validate(snap, direct, expected)
+                      save(phase + '.private.json', snap)
+                      result.update(valid=True, warp=snap['warp'], interface=snap['interface'],
+                                    firewall4=True, firewall6=True, ipify_sha256=fingerprint(ip),
+                                    trace_ip_sha256=fingerprint(snap['trace_ip']), colo=trace.get('colo'),
+                                    country=trace.get('loc'), ipify_changed_from_direct=True,
+                                    ipify_stable_since_ready=phase != 'ready',
+                                    warp_version=command(['dpkg-query', '-W', '-f=${Version}', 'cloudflare-warp']))
+                      if phase == 'ready':
+                          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+                              f.write('GA_PUBLIC_IP=' + ip + '\n')
+                  save(phase + '.safe.json', result)
+                  print(json.dumps(result))
+                  return 0
+              except Exception as exc:
+                  result['error'] = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__
+                  save(phase + '.safe.json', result)
+                  print(json.dumps(result))
+                  return 1
+
+
+          if __name__ == '__main__':
+              raise SystemExit(main(sys.argv[1]))
+
+          WARP20_PY
+          set -euo pipefail
+          mkdir -p .warp20 Results/diagnostics
+          python3 .warp20/check_egress.py direct
+          # Install only the official signed repository package, pinned to the observed SHA256.
+          curl -fsSL --connect-timeout 10 --max-time 60 https://pkg.cloudflareclient.com/pubkey.gpg -o .warp20/pubkey.gpg
+          sudo gpg --batch --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg .warp20/pubkey.gpg
+          printf '%s\n' 'deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ jammy main' | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          sudo apt-get update -qq
+          (cd .warp20 && apt-get download cloudflare-warp=2026.7.1377.0)
+          printf '%s\n' '69a24c0040cba2e09e5fd5d180d45f47f642aea3b58256ab010a70f41b9bcc39  .warp20/cloudflare-warp_2026.7.1377.0_amd64.deb' | sha256sum -c -
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ./.warp20/cloudflare-warp_2026.7.1377.0_amd64.deb
+          sudo systemctl start warp-svc
+          for i in $(seq 1 15); do
+            if warp-cli --accept-tos status >Results/diagnostics/warp-status.txt 2>&1; then break; fi
+            sleep 2
+          done
+          warp-cli --accept-tos registration new >Results/diagnostics/warp-registration.txt 2>&1
+          warp-cli --accept-tos mode warp+doh >Results/diagnostics/warp-mode.txt 2>&1
+          warp-cli --accept-tos tunnel protocol set MASQUE >Results/diagnostics/warp-protocol.txt 2>&1
+          warp-cli --accept-tos connect >Results/diagnostics/warp-connect.txt 2>&1
+          ready=0
+          for i in $(seq 1 24); do
+            if curl -4 --noproxy '*' -fsS --connect-timeout 3 --max-time 5 https://www.cloudflare.com/cdn-cgi/trace >.warp20/trace.txt 2>/dev/null && grep -Eq '^warp=(on|plus)$' .warp20/trace.txt; then ready=1; break; fi
+            sleep 3
+          done
+          if [ "$ready" != 1 ]; then echo 'WARP did not become ready; no direct fallback.'; exit 1; fi
+          ip link show CloudflareWARP >/dev/null
+          # Only this ephemeral runner UID is restricted; the root-owned WARP transport can reconnect.
+          # Both IP families are covered; loopback remains available for browser CDP and the DNS stub.
+          for fw in iptables ip6tables; do
+            sudo "$fw" -w 5 -N CTF_WARP20
+            sudo "$fw" -w 5 -A CTF_WARP20 -o lo -j ACCEPT
+            sudo "$fw" -w 5 -A CTF_WARP20 -o CloudflareWARP -j ACCEPT
+            sudo "$fw" -w 5 -A CTF_WARP20 -j REJECT
+            sudo "$fw" -w 5 -I OUTPUT 1 -m owner --uid-owner "$(id -u)" -j CTF_WARP20
+          done
+          # Verify the fail-closed rule actively against the physical route, without disconnecting WARP.
+          physical="$(ip -4 route show table main default | awk 'NR==1 {print $5}')"
+          test -n "$physical"
+          if curl -4 --noproxy '*' --interface "$physical" -fsS --connect-timeout 3 --max-time 5 https://1.1.1.1/cdn-cgi/trace > /dev/null 2>&1; then
+            echo 'Physical egress remained usable; abort.'; exit 1
+          fi
+          python3 - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          text = subprocess.check_output(['sudo','iptables','-w','5','-L','CTF_WARP20','-n','-v','-x'], text=True)
+          reject = [row.split() for row in text.splitlines() if 'REJECT' in row]
+          assert len(reject) == 1 and int(reject[0][0]) > 0, 'Physical-route failure did not exercise the firewall'
+          Path('.warp20/firewall-test.safe.json').write_text(json.dumps({'physical_egress_block_verified':True,'rejected_packets':int(reject[0][0])}), encoding='utf-8')
+          print('Physical-route probe rejected by the experiment firewall')
+          PY
+          python3 .warp20/check_egress.py ready
+
+      # Admission checks the effective WARP exit, never the original GA address.
       - name: Capture GA egress
         id: egress
         shell: bash
@@ -372,7 +566,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p Results/diagnostics
-          ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+          ip="$GA_PUBLIC_IP"
           export GA_PUBLIC_IP="$ip"
           python3 - <<'PY'
           import json
@@ -850,6 +1044,23 @@ jobs:
           wait_ms=$(python3 -c 'import json,sys,time; print(max(0,int(json.load(sys.stdin)["scheduled_at_ms"])-int(time.time()*1000)))' <<<"$response")
           echo "coordinator_wait_ms=$wait_ms slot=$GA_SLOT"
           python3 -c 'import sys,time; time.sleep(max(0,int(sys.argv[1]))/1000)' "$wait_ms"
+
+      - name: Verify WARP immediately before registration
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
+        id: warp_before
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          for name in ('OUTLOOK_PROXY_URL', 'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'all_proxy'):
+              assert not os.environ.get(name), 'Unexpected application proxy: ' + name
+          p = Path('config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json')
+          assert not json.loads(p.read_text(encoding='utf-8-sig')).get('proxy'), 'Baseline config overrides full tunnel'
+          print('Browser uses runner network; no application proxy configured')
+          PY
+          python3 .warp20/check_egress.py before
 
       - name: Run no-proxy live probe on GA own IP
         if: ${{ steps.egress.outputs.should_probe != 'false' }}
@@ -1546,6 +1757,46 @@ jobs:
           echo "outlookEmail integration attempted success=$success"
           exit 0
 
+      - name: Verify WARP after registration and import
+        if: ${{ always() && steps.warp.outcome == 'success' }}
+        id: warp_after
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .warp20/check_egress.py after
+
+      - name: Remove experiment firewall and disconnect WARP
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Remove only the two rules/chains created by this experiment, before artifact transport.
+          cleanup_ok=1
+          for fw in iptables ip6tables; do
+            if sudo "$fw" -w 5 -C OUTPUT -m owner --uid-owner "$(id -u)" -j CTF_WARP20 2>/dev/null; then
+              sudo "$fw" -w 5 -D OUTPUT -m owner --uid-owner "$(id -u)" -j CTF_WARP20 || cleanup_ok=0
+            fi
+            if sudo "$fw" -w 5 -L CTF_WARP20 >/dev/null 2>&1; then
+              sudo "$fw" -w 5 -F CTF_WARP20 || cleanup_ok=0
+              sudo "$fw" -w 5 -X CTF_WARP20 || cleanup_ok=0
+            fi
+          done
+          if command -v warp-cli >/dev/null; then timeout 15 warp-cli --accept-tos disconnect >/dev/null 2>&1 || true; fi
+          mkdir -p .warp20
+          printf '{"firewall_cleanup_ok":%s}\n' "$([ "$cleanup_ok" = 1 ] && echo true || echo false)" > .warp20/cleanup.safe.json
+          test "$cleanup_ok" = 1
+
+      - name: Upload WARP network evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-warp-network-${{ github.run_id }}-${{ matrix.attempt }}
+          path: .warp20/*.safe.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Build redacted machine-readable verdict
         if: ${{ always() }}
         shell: bash
@@ -1953,6 +2204,10 @@ jobs:
               "attempt": os.environ.get("ATTEMPT", ""),
               "variant": os.environ.get("VARIANT", ""),
               "network_mode": os.environ.get("NETWORK_MODE", ""),
+              "egress_transport": "cloudflare_warp_masque",
+              "warp_ready": load_json(".warp20/ready.safe.json"),
+              "warp_before": load_json(".warp20/before.safe.json"),
+              "warp_after": load_json(".warp20/after.safe.json"),
               "runner": os.environ.get("RUNNER_LABEL", ""),
               "orchestration_id": os.environ.get("ORCHESTRATION_ID", ""),
               "fresh_session_restart_policy": fresh_session_restart_policy,
