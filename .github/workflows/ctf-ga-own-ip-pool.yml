@@ -1,4 +1,4 @@
-name: CTF GA own IP pool probe
+name: CTF direct egress bounded 20-slot control
 
 on:
   workflow_dispatch:
@@ -197,6 +197,26 @@ jobs:
       GA_COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
       GA_COORDINATOR_SLOT: ${{ matrix.attempt }}
     steps:
+      - name: Lock one authorized direct 20-slot batch
+        shell: bash
+        env:
+          ACTUAL_INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          expected = json.loads('{"node_slots_json": "[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]", "orchestration_id": "direct20-20261006-once", "fresh_session_restart_policy": "off", "network_mode": "ga_own_ip", "variant": "same_session_oauth_security_email_fresh1", "runner": "ubuntu-22.04", "timeout_minutes": "35", "probe_timeout_minutes": "12", "fresh_absolute_timeout_seconds": "60", "per_ip_max_registrations": "1", "egress_prefix_denylist": "4.,13.,20.,40.,52.,68.,74.249.", "pre_first_hold_warmup_ms": "", "pre_first_hold_warmup_policy": "fixed_input", "signup_country_policy": "source_default", "signup_dob_policy": "source_default", "email_domain_policy": "source_default", "slot_stagger_seconds": "12", "coordinator_mode": "final_only", "max_parallel": "20", "runtime_mode": "legacy", "runtime_cache_revision": "v1", "stop_on_rechallenge": "0", "primary_final_variant": "", "proxy_pool_file": "", "ingest_metadata": "group_id=2856339019;tag_ids=2125410490"}')
+          actual = json.loads(os.environ['ACTUAL_INPUTS'])
+          assert not set(actual) - set(expected), 'Unexpected input key'
+          for key, value in expected.items():
+              if value == '' and key not in actual: actual[key] = ''
+          assert actual == expected, 'Experiment inputs changed'
+          assert os.environ['GITHUB_RUN_ATTEMPT'] == '1', 'No reruns authorized'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/exp/direct20-20261006'
+          assert int(os.environ['GA_COORDINATOR_SLOT']) in range(1, 21)
+          print('Bounded direct-egress experiment: 20 slots, one session each, no automatic repeats')
+          PY
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -363,6 +383,90 @@ jobs:
           grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
           grep -q 'minimal_natural_hold' protocol_runtime_probe.py
 
+      - name: Verify direct GA egress
+        id: direct
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .direct20 Results/diagnostics
+          cat > .direct20/check_direct.py <<'DIRECT20_PY'
+          """Read-only direct-egress validation; no signup requests or host network changes."""
+          import hashlib
+          import ipaddress
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          ROOT=Path('.direct20')
+
+          def command(args):
+           r=subprocess.run(args,capture_output=True,text=True,timeout=25)
+           if r.returncode: raise RuntimeError('network_command_failed:'+Path(args[0]).name)
+           return r.stdout.strip()
+
+          def get(url):
+           return command(['curl','-4','--noproxy','*','-fsS','--connect-timeout','8','--max-time','18',url])
+
+          def parse_trace(text):
+           pairs=[line.split('=',1) for line in text.splitlines() if '=' in line]
+           if len({k for k,v in pairs})!=len(pairs): raise ValueError('duplicate_trace_field')
+           return dict(pairs)
+
+          def valid_ip(text):
+           ip=ipaddress.ip_address(text)
+           if ip.version!=4 or not ip.is_global: raise ValueError('not_public_ipv4')
+           return str(ip)
+
+          def validate(snapshot,expected_ip=None):
+           valid_ip(snapshot['ip']); valid_ip(snapshot['trace_ip'])
+           if snapshot['warp']!='off': raise ValueError('warp_not_off')
+           if not snapshot['interface'] or 'warp' in snapshot['interface'].lower(): raise ValueError('not_direct_interface')
+           if snapshot['warp_service_active'] is not False: raise ValueError('warp_service_active')
+           if expected_ip and snapshot['ip']!=expected_ip: raise ValueError('ipify_egress_changed_during_session')
+           return True
+
+          def save(name,data):
+           ROOT.mkdir(exist_ok=True)
+           (ROOT/name).write_text(json.dumps(data,indent=2),encoding='utf-8')
+
+          def fingerprint(text): return hashlib.sha256(text.encode()).hexdigest()
+
+          def main(phase):
+           if phase not in ('ready','before','after'): raise ValueError('invalid_phase')
+           result={'phase':phase,'slot':int(os.environ['GA_COORDINATOR_SLOT']),'egress_transport':'ga_direct','valid':False}
+           try:
+            for key in ('OUTLOOK_PROXY_URL','http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','all_proxy'):
+             if os.environ.get(key): raise ValueError('unexpected_application_proxy:'+key)
+            cfg=Path('config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json')
+            if json.loads(cfg.read_text(encoding='utf-8-sig')).get('proxy'): raise ValueError('baseline_has_proxy')
+            ip=valid_ip(get('https://api.ipify.org'))
+            trace=parse_trace(get('https://www.cloudflare.com/cdn-cgi/trace'))
+            route=json.loads(command(['ip','-j','-4','route','get','1.1.1.1','uid',str(os.getuid())]))
+            svc=subprocess.run(['systemctl','is-active','--quiet','warp-svc'],capture_output=True,timeout=15)
+            snapshot={'ip':ip,'trace_ip':trace.get('ip',''),'warp':trace.get('warp',''),
+                      'interface':route[0].get('dev'),'warp_service_active':svc.returncode==0}
+            expected=json.loads((ROOT/'ready.private.json').read_text())['ip'] if phase!='ready' else None
+            validate(snapshot,expected)
+            save(phase+'.private.json',snapshot)
+            result.update(valid=True,warp='off',interface=snapshot['interface'],warp_service_active=False,
+                          ipify_sha256=fingerprint(ip),trace_ip_sha256=fingerprint(snapshot['trace_ip']),
+                          country=trace.get('loc'),colo=trace.get('colo'),ipify_stable_since_ready=phase!='ready')
+            if phase=='ready':
+             with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f: f.write('GA_PUBLIC_IP='+ip+'\n')
+           except Exception as exc:
+            result['error']=str(exc) if isinstance(exc,(ValueError,RuntimeError)) else type(exc).__name__
+           save(phase+'.safe.json',result)
+           print(json.dumps(result))
+           return 0 if result['valid'] else 1
+
+          if __name__=='__main__': raise SystemExit(main(sys.argv[1]))
+
+          DIRECT20_PY
+          python3 .direct20/check_direct.py ready
+
       # Capture egress + denylist BEFORE heavy setup/stagger so bad prefixes exit in ~1 min.
       - name: Capture GA egress
         id: egress
@@ -372,7 +476,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p Results/diagnostics
-          ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+          ip="$GA_PUBLIC_IP"
           export GA_PUBLIC_IP="$ip"
           python3 - <<'PY'
           import json
@@ -850,6 +954,14 @@ jobs:
           wait_ms=$(python3 -c 'import json,sys,time; print(max(0,int(json.load(sys.stdin)["scheduled_at_ms"])-int(time.time()*1000)))' <<<"$response")
           echo "coordinator_wait_ms=$wait_ms slot=$GA_SLOT"
           python3 -c 'import sys,time; time.sleep(max(0,int(sys.argv[1]))/1000)' "$wait_ms"
+
+      - name: Verify direct egress immediately before registration
+        if: ${{ steps.egress.outputs.should_probe != 'false' }}
+        id: direct_before
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .direct20/check_direct.py before
 
       - name: Run no-proxy live probe on GA own IP
         if: ${{ steps.egress.outputs.should_probe != 'false' }}
@@ -1546,6 +1658,24 @@ jobs:
           echo "outlookEmail integration attempted success=$success"
           exit 0
 
+      - name: Verify direct egress after registration and import
+        if: ${{ always() && steps.direct.outcome == 'success' }}
+        id: direct_after
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .direct20/check_direct.py after
+
+      - name: Upload direct network evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-direct-network-${{ github.run_id }}-${{ matrix.attempt }}
+          path: .direct20/*.safe.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Build redacted machine-readable verdict
         if: ${{ always() }}
         shell: bash
@@ -1953,6 +2083,10 @@ jobs:
               "attempt": os.environ.get("ATTEMPT", ""),
               "variant": os.environ.get("VARIANT", ""),
               "network_mode": os.environ.get("NETWORK_MODE", ""),
+              "egress_transport": "ga_direct",
+              "direct_ready": load_json(".direct20/ready.safe.json"),
+              "direct_before": load_json(".direct20/before.safe.json"),
+              "direct_after": load_json(".direct20/after.safe.json"),
               "runner": os.environ.get("RUNNER_LABEL", ""),
               "orchestration_id": os.environ.get("ORCHESTRATION_ID", ""),
               "fresh_session_restart_policy": fresh_session_restart_policy,
