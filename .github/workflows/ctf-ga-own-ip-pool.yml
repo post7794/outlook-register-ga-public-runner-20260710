@@ -1,2179 +1,322 @@
-name: CTF GA own IP pool probe
-
-on:
-  workflow_dispatch:
-    inputs:
-      node_slots_json:
-        description: "JSON matrix labels; in proxy mode they select pool slots, in GA-own-IP mode each label starts a fresh runner"
-        required: true
-        default: "[1,2,3,4,5]"
-      orchestration_id:
-        description: "Optional public-safe batch correlation label used by the target Graph-healthy orchestrator"
-        required: false
-        default: ""
-      fresh_session_restart_policy:
-        description: "Full new registration session after a production fresh-policy stop: off, randomized A/B, or all eligible slots"
-        required: true
-        default: "off"
-        type: choice
-        options:
-          - "off"
-          - fresh_ab_v1
-          - fresh_all_v1
-      network_mode:
-        description: "Use the fresh GA runner egress directly or route through the configured proxy pool"
-        required: true
-        default: "ga_own_ip"
-        type: choice
-        options:
-          - ga_own_ip
-          - proxy_pool
-      variant:
-        description: "Probe variant to run on each fresh GA egress IP"
-        required: true
-        default: "same_session_oauth_smoke"
-        type: choice
-        options:
-          - default
-          - historical_ga_success_default
-          - historical_ga_highrate_336a973
-          - historical_ga_fresh_rechallenge
-          - same_session_oauth_smoke
-          - same_session_oauth_sunbrowser
-          - same_session_oauth_security_email
-          - same_session_oauth_security_email_fresh1
-          - offline_ads_like_ga_fresh_rechallenge
-          - offline_ads_pool_ga_fresh_rechallenge
-          - semiprotocol_5s_stable
-          - sunbrowser_thin_natural
-          - semiprotocol_5s_historical_firstpass
-          - semiprotocol_5s_histfp_no_inject_knp
-          - release_5s_success_baseline
-          - release_5s_success_attempt2
-          - paired_5s_then_thin
-          - paired_thin_then_5s
-          - natural_legacy
-          - ui_natural
-      runner:
-        description: "Ubuntu runner label for the GA egress pool"
-        required: true
-        default: "ubuntu-22.04"
-        type: choice
-        options:
-          - ubuntu-latest
-          - ubuntu-24.04
-          - ubuntu-22.04
-      timeout_minutes:
-        description: "Per-job timeout minutes"
-        required: true
-        default: "30"
-      probe_timeout_minutes:
-        description: "Live probe timeout inside each job; timed-out bad IPs still upload evidence"
-        required: true
-        default: "18"
-      fresh_absolute_timeout_seconds:
-        description: "Hard deadline in seconds from the first accepted result|0 across all fresh-rechallenge attempts and rounds; 0 disables"
-        required: true
-        default: "60"
-      per_ip_max_registrations:
-        description: "Repeat successful registrations on the same GA egress IP until first non-success, capped here. Use 1 for legacy one-shot probing."
-        required: true
-        default: "1"
-      egress_prefix_denylist:
-        description: "Optional comma-separated bad egress IP prefixes to skip before touching the target, e.g. 20.,52. Recommended file: config/egress_prefix_denylist.recommended.txt. Over-provision candidates (e.g. 1..36) when denylist is non-empty so skipped IPs do not starve live count."
-        required: false
-        default: "4.,13.,20.,40.,52.,68.,74.249."
-      pre_first_hold_warmup_ms:
-        description: "Override captcha pre-first-hold warmup in ms; empty uses config default"
-        required: false
-        default: ""
-      pre_first_hold_warmup_policy:
-        description: "Captcha warmup policy: fixed input/default, blocked 14s-vs-22s A/B, or one explicit arm"
-        required: true
-        default: fixed_input
-        type: choice
-        options:
-          - fixed_input
-          - warmup_ab_14s_22s_v1
-          - warmup_14s_v1
-          - warmup_22s_v1
-      signup_country_policy:
-        description: "Protocol/CreateAccount country: source default, blocked US-vs-LK A/B, or one explicit arm"
-        required: true
-        default: source_default
-        type: choice
-        options:
-          - source_default
-          - country_ab_us_lk_v1
-          - country_us_v1
-          - country_lk_v1
-      signup_dob_policy:
-        description: "Signup DOB month/day: source default Jan-1, blocked random-vs-default A/B, or one explicit arm"
-        required: true
-        default: source_default
-        type: choice
-        options:
-          - source_default
-          - dob_ab_random_default_v1
-          - dob_random_v1
-          - dob_default_v1
-      email_domain_policy:
-        description: "Mailbox namespace: source default Outlook, blocked Hotmail-vs-Outlook A/B, or one explicit arm"
-        required: true
-        default: source_default
-        type: choice
-        options:
-          - source_default
-          - domain_ab_hotmail_outlook_v1
-          - domain_hotmail_v1
-          - domain_outlook_v1
-      slot_stagger_seconds:
-        description: "Stagger only probe-bound slots after denylist: delay=((attempt-1)%max_parallel)*seconds. Use 10-15 for speed, 30 for max isolation, 0 for concurrent."
-        required: true
-        default: "12"
-      coordinator_mode:
-        description: "Coordinator policy after denylist. final_only allows concurrent entry but still serializes decisive captcha finals."
-        required: true
-        default: "final_only"
-        type: choice
-        options:
-          - "off"
-          - entry
-          - entry_final
-          - final_only
-      max_parallel:
-        description: "Maximum simultaneous matrix jobs; 20 is the verified sweet point with final_only and a 12s coordinator gap."
-        required: true
-        default: "20"
-      runtime_mode:
-        description: "Runtime bootstrap: legacy installs apt/pip per live slot; prebuilt restores the validated dependency/font/browser cache."
-        required: true
-        default: "prebuilt"
-        type: choice
-        options:
-          - legacy
-          - prebuilt
-      runtime_cache_revision:
-        description: "Prebuilt cache revision created by build-ga-runtime-cache.yml. Bump when Python, browser, or fonts change."
-        required: true
-        default: "v1"
-      stop_on_rechallenge:
-        description: "Override historical wrapper to stop stale proof fallback when risk/verify requests a fresh HumanCaptcha"
-        required: true
-        default: "0"
-      primary_final_variant:
-        description: "Optional retry candidate promoted before the first real collector fetch"
-        required: false
-        default: ""
-      proxy_pool_file:
-        description: "Optional checked-in private-source mihomo YAML. If empty, the optional CTF_PROXY_SUBSCRIPTION_URL Actions Secret is used."
-        required: false
-        default: ""
-      ingest_metadata:
-        description: "Optional 'group_id=<id>;tag_ids=<id,id>'; group applies to any import, tag ids only with a verified security-email binding"
-        required: false
-        default: ""
+name: CTF paired preverify metadata read-time diagnostic
+'on':
+  workflow_dispatch: {}
 permissions:
   contents: read
-
+concurrency:
+  group: preverify-readtime-pair-fixed-20261006
+  cancel-in-progress: false
 jobs:
-  own-ip-probe:
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
-    strategy:
-      fail-fast: false
-      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
-      matrix:
-        attempt: ${{ fromJSON(inputs.node_slots_json) }}
+  observe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
     env:
       PYTHONIOENCODING: utf-8
-      CLOAKBROWSER_SUPPRESS_FONT_WARNING: "1"
-      CTF_PROXY_SUBSCRIPTION_URL: ${{ secrets.CTF_PROXY_SUBSCRIPTION_URL }}
+      CLOAKBROWSER_SUPPRESS_FONT_WARNING: '1'
       RESULTS_ENCRYPTION_CERT_B64: ${{ vars.RESULTS_ENCRYPTION_CERT_B64 }}
-      OUTLOOK_REAL_FINAL_PRIMARY_VARIANT: ${{ inputs.primary_final_variant }}
-      INGEST_METADATA: ${{ inputs.ingest_metadata }}
-      GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
-      GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
-      GA_COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
-      GA_COORDINATOR_SLOT: ${{ matrix.attempt }}
+      GA_VARIANT: same_session_oauth_security_email_fresh1
+      GA_NETWORK_MODE: ga_own_ip
+      GA_SLOT: '1'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.variant == 'same_session_oauth_security_email_fresh1' && 'c98f52a1fab80df3ab125ebb2b221521965f8b2b' || inputs.variant == 'same_session_oauth_security_email' && 'c98f52a1fab80df3ab125ebb2b221521965f8b2b' || inputs.variant == 'same_session_oauth_sunbrowser' && 'a04f4e0ae6edd41859755ba16c5720f08905f85a' || inputs.variant == 'sunbrowser_thin_natural' && '0f7a8643cf2ec6232f797e041f0cd79427bf38b9' || inputs.variant == 'historical_ga_success_default' && 'f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a' || inputs.variant == 'historical_ga_highrate_336a973' && '336a97312e3e89219ad6179b196bfa99239cb13e' || inputs.variant == 'historical_ga_fresh_rechallenge' && '96787a7561f5e4b8786c2fda9cf3f8f1da0035bf' || inputs.variant == 'same_session_oauth_smoke' && '8b6b9784bb866030d82ff23e0eafbba338a6d821' || (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || (inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' || inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge') && '0838ef3a52c6eb337b0847762757d282b36b9e5e' || vars.PRIVATE_SOURCE_REF }}
-          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
-          persist-credentials: false
-          clean: true
-
-      - name: Verify historical GA success baseline
-        if: ${{ inputs.variant == 'historical_ga_success_default' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=f8c9c0ea377a08b4c5c10a05c0558cda85d5a01a
-          actual=$(git rev-parse HEAD)
-          echo "expected=$expected actual=$actual"
-          test "$actual" = "$expected"
-          python3 - <<'PY'
-          from pathlib import Path
-          requirements = {
-              line.strip() for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
-          }
-          assert "cloakbrowser==0.4.8" in requirements, sorted(requirements)
-          assert Path("run_xvfb_natural_1920.sh").is_file()
-          PY
-          echo "historical_ga_success_source=$actual"
-
-      - name: Verify historical high-rate GA baseline
-        if: ${{ inputs.variant == 'historical_ga_highrate_336a973' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=336a973
-          actual=$(git rev-parse --short=7 HEAD)
-          echo "expected=$expected actual=$actual"
-          test "$actual" = "$expected"
-          grep -Fxq 'cloakbrowser==0.4.8' requirements.txt
-          test -f run_xvfb_natural_1920.sh
-          echo "historical_ga_highrate_source=$(git rev-parse HEAD)"
-
-      - name: Verify fresh rechallenge source
-        if: ${{ inputs.variant == 'historical_ga_fresh_rechallenge' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=96787a7561f5e4b8786c2fda9cf3f8f1da0035bf
-          actual=$(git rev-parse HEAD)
-          echo "expected=$expected actual=$actual"
-          test "$actual" = "$expected"
-          python3 - <<'PY'
-          from pathlib import Path
-          requirements = {line.strip() for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()}
-          assert "cloakbrowser==0.4.8" in requirements
-          controller = Path("controllers/base_controller.py").read_text(encoding="utf-8")
-          wrapper = Path("run_xvfb_natural_1920.sh").read_text(encoding="utf-8")
-          config = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json").read_text(encoding="utf-8")
-          assert "fresh_rechallenge_start" in controller
-          assert "OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1" in wrapper
-          assert '"hold_retries": 3' in config
-          PY
-
-      - name: Verify same-session OAuth smoke source
-        if: ${{ inputs.variant == 'same_session_oauth_smoke' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=8b6b9784bb866030d82ff23e0eafbba338a6d821
-          test "$(git rev-parse HEAD)" = "$expected"
-          test -f same_session_oauth.py
-          grep -q 'login.microsoftonline.com/{AUTHORITY}/oauth2/v2.0/authorize' get_token.py
-          grep -q 'run_same_session_oauth' protocol_runtime_probe.py
-
-      - name: Verify same-session OAuth SunBrowser source
-        if: ${{ inputs.variant == 'same_session_oauth_sunbrowser' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=a04f4e0ae6edd41859755ba16c5720f08905f85a
-          test "$(git rev-parse HEAD)" = "$expected"
-          test -f same_session_oauth.py
-          test -f run_xvfb_sunbrowser_natural_1920.sh
-          test -f tools/sunbrowser_localfp_adapter.py
-          grep -q 'login.microsoftonline.com/{AUTHORITY}/oauth2/v2.0/authorize' get_token.py
-          grep -q 'run_same_session_oauth' protocol_runtime_probe.py
-
-      - name: Verify security-email binding source
-        if: ${{ inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=c98f52a1fab80df3ab125ebb2b221521965f8b2b
-          test "$(git rev-parse HEAD)" = "$expected"
-          test -f same_session_oauth.py
-          test -f run_xvfb_sunbrowser_natural_1920.sh
-          test -f security_email_binding_hook.py
-          test -f tools/security_email_binding.py
-          grep -q 'security_email_binding_hook' protocol_runtime_probe.py
-          grep -q 'run_same_session_oauth' protocol_runtime_probe.py
-
-      - name: Verify exact 5s release source
-        if: ${{ inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=00b68437e041cbdcee2be209a18d7a5592f4c2dd
-          actual=$(git rev-parse HEAD)
-          echo "expected=$expected actual=$actual"
-          test "$actual" = "$expected"
-          test -f config.release-5s-success-ga.json
-          test -f run_xvfb_release_5s_success_baseline.sh
-          test -f run_xvfb_release_5s_success_attempt2.sh
-          grep -q -- '--time-warp-wall-ms 6500' run_xvfb_release_5s_success_attempt2.sh
-          grep -q -- '--time-warp-server-challenge-rounds 8' run_xvfb_release_5s_success_attempt2.sh
-          grep -q -- '--time-warp-retry-visible-challenge-after-ms 7000' run_xvfb_release_5s_success_attempt2.sh
-          grep -q -- '--real-final-neutral-w0-success' run_xvfb_release_5s_success_attempt2.sh
-
-      - name: Verify offline ADS-like source
-        if: ${{ inputs.variant == 'offline_ads_like_ga_fresh_rechallenge' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=0838ef3a52c6eb337b0847762757d282b36b9e5e
-          actual=$(git rev-parse HEAD)
-          echo "expected=$expected actual=$actual"
-          test "$actual" = "$expected"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          p = Path('config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json')
-          data = json.loads(p.read_text(encoding='utf-8'))
-          ua = str((data.get('context') or {}).get('user_agent') or '')
-          args = [str(x) for x in ((data.get('cloakbrowser') or {}).get('args') or [])]
-          ads = data.get('ads_like_profile') or {}
-          assert 'Chrome/146.0.7680.177' in ua, ua
-          assert '--no-sandbox' not in args, args
-          assert any(x.startswith('--fingerprint=') for x in args), args
-          assert str(ads.get('seed') or '') == '96290', ads
-          print(json.dumps({'ua': ua, 'cloak_args': args, 'ads_source': ads.get('source'), 'seed': ads.get('seed')}, ensure_ascii=False))
-          PY
-          grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
-          grep -q 'minimal_natural_hold' protocol_runtime_probe.py
-          grep -q 'FRESH_RECHALLENGE_ROUNDS' controllers/base_controller.py
-
-      - name: Verify offline ADS profile pool source
-        if: ${{ inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=0838ef3a52c6eb337b0847762757d282b36b9e5e
-          actual=$(git rev-parse HEAD)
-          test "$actual" = "$expected"
-          test -f config.ads_offline_profile_pool.json
-          test -f tools/fetch_ads_profile_template.py
-          python3 - <<'PY'
-          import json
-          data = json.load(open('config.ads_offline_profile_pool.json', encoding='utf-8'))
-          assert len(data.get('profiles') or []) >= 20
-          text = json.dumps(data, ensure_ascii=False).lower()
-          for forbidden in ('cookie', 'password', 'user_proxy_config', 'proxy_password', 'login_cookie'):
-              assert forbidden not in text, forbidden
-          print({'offline_profile_count': len(data['profiles'])})
-          PY
-          grep -q '_wait_for_ga_coordinator' controllers/patchright_controller.py
-          grep -q 'minimal_natural_hold' protocol_runtime_probe.py
-
-      # Capture egress + denylist BEFORE heavy setup/stagger so bad prefixes exit in ~1 min.
-      - name: Capture GA egress
-        id: egress
-        shell: bash
-        env:
-          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist }}
-        run: |
-          set -euxo pipefail
-          mkdir -p Results/diagnostics
-          ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
-          export GA_PUBLIC_IP="$ip"
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          data = {
-              "attempt": ${{ matrix.attempt }},
-              "variant": "${{ inputs.variant }}",
-              "network_mode": "${{ inputs.network_mode }}",
-              "runner": "${{ inputs.runner }}",
-              "runner_os": "${{ runner.os }}",
-              "runner_arch": "${{ runner.arch }}",
-              "public_ip": os.environ.get("GA_PUBLIC_IP", ""),
-              "egress_prefix_denylist": os.environ.get("EGRESS_PREFIX_DENYLIST", ""),
-          }
-          with open("Results/diagnostics/ga_egress.json", "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
-          print(json.dumps(data, ensure_ascii=False))
-
-          ip = data.get("public_ip") or ""
-          raw = os.environ.get("EGRESS_PREFIX_DENYLIST", "")
-          prefixes = [p.strip() for p in raw.split(",") if p.strip()]
-          matched = ""
-          for prefix in prefixes:
-              token = prefix
-              if re.fullmatch(r"\d{1,3}", token):
-                  token += "."
-              if ip == token.rstrip(".") or ip.startswith(token):
-                  matched = prefix
-                  break
-          github_output = os.environ.get("GITHUB_OUTPUT")
-          if matched:
-              reason = f"egress_prefix_denylist matched prefix={matched} ip={ip}"
-              with open("Results/diagnostics/egress_skip.txt", "w", encoding="utf-8") as f:
-                  f.write(reason + "\n")
-              print(reason)
-              if github_output:
-                  with open(github_output, "a", encoding="utf-8") as f:
-                      f.write("should_probe=false\n")
-                      f.write(f"skip_reason={reason}\n")
-          elif github_output:
-              with open(github_output, "a", encoding="utf-8") as f:
-                  f.write("should_probe=true\n")
-          PY
-
-      - name: Restore precompiled GA runtime
-        if: ${{ steps.egress.outputs.should_probe != 'false' && inputs.runtime_mode == 'prebuilt' }}
-        id: runtime-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .venv
-            ~/.cloakbrowser
-            ~/.local/share/fonts/ga-runtime
-          key: ${{ runner.os }}-${{ runner.arch }}-ga-runtime-${{ inputs.runtime_cache_revision }}-${{ inputs.runner == 'ubuntu-24.04' && 'py312' || 'py310' }}-cloak048
-          fail-on-cache-miss: true
-
-      - name: Validate precompiled GA runtime
-        if: ${{ steps.egress.outputs.should_probe != 'false' && inputs.runtime_mode == 'prebuilt' }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          . .venv/bin/activate
-          python - <<'PY'
-          import importlib.metadata as md
-          expected = {
-              'cloakbrowser': '0.4.8',
-              'playwright': '1.53.0',
-              'patchright': '1.61.2',
-          }
-          for package, wanted in expected.items():
-              actual = md.version(package)
-              print(f'{package}={actual}')
-              if actual != wanted:
-                  raise SystemExit(f'{package}: expected {wanted}, got {actual}')
-          PY
-          chrome=$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)
-          test -x "$chrome"
-          "$chrome" --version
-          test -d "$HOME/.local/share/fonts/ga-runtime"
-          fc-cache -f "$HOME/.local/share/fonts/ga-runtime"
-          fc-match 'Segoe UI' | head -1
-          fc-match 'Calibri' | head -1
-
-      - name: Install pinned SunBrowser LocalFP runtime
-        if: ${{ steps.egress.outputs.should_probe != 'false' && (inputs.variant == 'sunbrowser_thin_natural' || inputs.variant == 'same_session_oauth_sunbrowser' || inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') }}
-        shell: bash
-        env:
-          NETWORK_MODE_INPUT: ${{ inputs.network_mode }}
-        run: |
-          set -euxo pipefail
-          if [ "$NETWORK_MODE_INPUT" != "ga_own_ip" ]; then
-            echo "SunBrowser public-runner v1 requires network_mode=ga_own_ip so region can fail closed to us" >&2
-            exit 2
-          fi
-          SUNBROWSER_REGION_INPUT=us
-          asset="SunBrowser-LocalFP-Linux-x64-20260718.tar.gz"
-          expected="d1f881602e4e07c873154f3acd745b8772739c5f7469721c39eef0741b96235a"
-          url="https://github.com/post7794/outlook-register-ga-public-runner-20260710/releases/download/sunbrowser-localfp-20260718/$asset"
-          archive_dir="$RUNNER_TEMP/sunbrowser-localfp-archive"
-          install_dir="$RUNNER_TEMP/sunbrowser-localfp"
-          mkdir -p "$archive_dir" "$install_dir" Results/diagnostics
-          curl -fsSL --retry 4 --retry-all-errors "$url" -o "$archive_dir/$asset"
-          echo "$expected  $archive_dir/$asset" | sha256sum -c -
-          tar -xzf "$archive_dir/$asset" -C "$install_dir"
-          root="$install_dir/SunBrowser-LocalFP-Linux-x64-20260718"
-          test -f "$root/MANIFEST.sha256"
-          if ! (cd "$root" && sha256sum -c MANIFEST.sha256) > Results/diagnostics/sunbrowser-manifest.log 2>&1; then
-            tail -80 Results/diagnostics/sunbrowser-manifest.log
-            exit 1
-          fi
-          chmod +x "$root/tools/node" "$root/runtime/SunBrowser" "$root/runtime/chrome-sandbox"
-          echo "SUNBROWSER_LOCALFP_ROOT=$root" >> "$GITHUB_ENV"
-          echo "SUNBROWSER_REGION=$SUNBROWSER_REGION_INPUT" >> "$GITHUB_ENV"
-          "$root/runtime/SunBrowser" --protected-disable-safe-open --version
-          echo "SunBrowser package archive and manifest: PASS"
-
-      - name: System dependencies
-        if: ${{ steps.egress.outputs.should_probe != 'false' && inputs.runtime_mode == 'legacy' }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb xauth ca-certificates curl unzip fontconfig software-properties-common \
-            fonts-liberation fonts-noto fonts-noto-cjk fonts-crosextra-carlito fonts-crosextra-caladea
-          sudo apt-get install -y --no-install-recommends fonts-selawik || true
-          sudo add-apt-repository -y multiverse || true
-          sudo apt-get update || true
-          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | sudo debconf-set-selections || true
-          sudo apt-get install -y --no-install-recommends ttf-mscorefonts-installer || true
-          fc-cache -f
-
-      - name: Python environment
-        if: ${{ steps.egress.outputs.should_probe != 'false' && inputs.runtime_mode == 'legacy' }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip wheel setuptools
-          pip install -r requirements.txt
-          if [ "${{ inputs.variant }}" != "sunbrowser_thin_natural" ] && [ "${{ inputs.variant }}" != "same_session_oauth_sunbrowser" ] && [ "${{ inputs.variant }}" != "same_session_oauth_security_email" ] && [ "${{ inputs.variant }}" != "same_session_oauth_security_email_fresh1" ]; then
-            set +e
-            python -m cloakbrowser install
-            cb_code=$?
-            set -e
-            if [ "$cb_code" -ne 0 ]; then
-              echo "cloakbrowser install exited $cb_code; checking extracted binary"
-              test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
-            fi
-          else
-            echo "SunBrowser variant selected; skipping CloakBrowser binary install"
-          fi
-
-      - name: Install Windows-like font family aliases
-        if: ${{ steps.egress.outputs.should_probe != 'false' && inputs.runtime_mode == 'legacy' }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          . .venv/bin/activate
-          python - <<'PY'
-          from fontTools.ttLib import TTFont
-          from pathlib import Path
-
-          out = Path.home() / ".local/share/fonts/windows-ctf"
-          out.mkdir(parents=True, exist_ok=True)
-
-          def pick(*paths):
-              return next((Path(p) for p in paths if Path(p).exists()), None)
-
-          default_src = pick(
-              '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
-              '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-              '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',
-              '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
-          )
-          selawik_src = pick(
-              '/usr/share/fonts/truetype/selawik/Selawik.ttf',
-              '/usr/share/fonts/truetype/selawik/Selawik-Regular.ttf',
-          ) or default_src
-          calibri_src = pick(
-              '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',
-              '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',
-          ) or default_src
-          msgothic_src = pick(
-              '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-              '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-          ) or default_src
-          if not default_src:
-              raise SystemExit('no base font found')
-
-          def set_name(font, name_id, value):
-              font['name'].setName(value, name_id, 3, 1, 0x409)
-              font['name'].setName(value, name_id, 1, 0, 0)
-
-          families = [
-              ('Segoe UI', 'Regular', selawik_src),
-              ('Segoe UI Light', 'Regular', selawik_src),
-              ('Calibri', 'Regular', calibri_src),
-              ('Cambria', 'Regular', pick('/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf') or calibri_src),
-              ('Marlett', 'Regular', default_src),
-              ('MS UI Gothic', 'Regular', msgothic_src),
-              ('Franklin Gothic', 'Regular', default_src),
-          ]
-          for family, subfamily, src in families:
-              try:
-                  font = TTFont(str(src))
-              except Exception as exc:
-                  if exc.__class__.__name__ == 'TTLibFileIsCollectionError':
-                      font = TTFont(str(src), fontNumber=0)
-                  else:
-                      raise
-              full = f'{family} {subfamily}'
-              ps = ''.join(ch for ch in full if ch.isalnum())
-              set_name(font, 1, family)
-              set_name(font, 2, subfamily)
-              set_name(font, 4, full)
-              set_name(font, 6, ps)
-              set_name(font, 16, family)
-              set_name(font, 17, subfamily)
-              font.save(str(out / f'{ps}.ttf'))
-          PY
-          fc-cache -f "$HOME/.local/share/fonts"
-          fc-match 'Segoe UI' | head -1
-          fc-match 'Calibri' | head -1
-
-      - name: Normalize shell scripts
-        if: ${{ steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sed -i 's/\r$//' run_xvfb_*.sh
-          chmod +x run_xvfb_*.sh
-
-      - name: Enable fresh HumanCaptcha rechallenge handling
-        if: ${{ inputs.stop_on_rechallenge == '1' && steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f run_xvfb_natural_1920.sh
-          sed -i 's/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=0/OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1/' run_xvfb_natural_1920.sh
-          grep -n 'OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_STOP_ON_RECHALLENGE=1' run_xvfb_natural_1920.sh
-
-      - name: Apply offline ADS profile-pool fingerprint
-        if: ${{ inputs.variant == 'offline_ads_pool_ga_fresh_rechallenge' && steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p .ads-offline/generated Results/diagnostics
-          python3 tools/fetch_ads_profile_template.py \
-            --offline-pool config.ads_offline_profile_pool.json \
-            --slot "${{ matrix.attempt }}" \
-            --out .ads-offline/profile.json | tee Results/diagnostics/ads_offline_select.json
-          python3 ads_like_cloak_profile_generator.py \
-            --source-json .ads-offline/profile.json \
-            --base-config config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json \
-            --out-dir .ads-offline/generated \
-            --profile-root ./profiles \
-            --prefix "ga-offline-ads-slot-${{ matrix.attempt }}" \
-            --count 1 \
-            --seed-mode derived \
-            --window-size 1920,1080 \
-            --hold-retries 3 \
-            --chromium-version 146.0.7680.177
-          generated=$(find .ads-offline/generated -maxdepth 1 -type f -name 'config.ctf.runtime.*.json' ! -name '*manifest*' | head -n1)
-          test -n "$generated"
-          cp "$generated" config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json
-          python3 - <<'PY'
-          import json
-          p = 'config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json'
-          data = json.load(open(p, encoding='utf-8'))
-          ua = str((data.get('context') or {}).get('user_agent') or '')
-          args = [str(x) for x in ((data.get('cloakbrowser') or {}).get('args') or [])]
-          ads = data.get('ads_like_profile') or {}
-          seeds = [x.split('=', 1)[1] for x in args if x.startswith('--fingerprint=')]
-          assert 'Chrome/146.0.7680.177' in ua, ua
-          assert '--no-sandbox' not in args, args
-          assert len(seeds) == 1 and len(seeds[0]) == 5, seeds
-          assert ads.get('source') == 'offline AdsPower profile JSON', ads
-          print(json.dumps({'ua': ua, 'seed': seeds[0], 'source': ads.get('source')}, ensure_ascii=False))
-          PY
-
-      - name: Diversify exact-release Cloak fingerprint per fresh runner
-        if: ${{ (inputs.variant == 'release_5s_success_baseline' || inputs.variant == 'release_5s_success_attempt2') && steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        env:
-          GA_SLOT: ${{ matrix.attempt }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-
-          path = Path("config.release-5s-success-ga.json")
-          data = json.loads(path.read_text(encoding="utf-8"))
-          material = f"{os.environ.get('GITHUB_RUN_ID','')}:{os.environ['GA_SLOT']}"
-          seed = 10000 + int(hashlib.sha256(material.encode()).hexdigest()[:8], 16) % 90000
-          cloak = data.setdefault("cloakbrowser", {})
-          args = [str(value) for value in (cloak.get("args") or [])]
-          args = [value for value in args if not value.startswith("--fingerprint=")]
-          args.insert(0, f"--fingerprint={seed}")
-          cloak["args"] = args
-          profile = data.setdefault("ads_like_profile", {})
-          profile["seed"] = str(seed)
-          profile["source"] = "GA per-run deterministic seed"
-          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-          print(json.dumps({"fingerprint_seed": seed, "slot": os.environ["GA_SLOT"]}))
-          PY
-
-      - name: Start subscription proxy
-        if: ${{ inputs.network_mode == 'proxy_pool' && steps.egress.outputs.should_probe != 'false' && (env.CTF_PROXY_SUBSCRIPTION_URL != '' || inputs.proxy_pool_file != '') }}
-        shell: bash
-        env:
-          PROXY_SUBSCRIPTION_URL: ${{ env.CTF_PROXY_SUBSCRIPTION_URL }}
-          PROXY_POOL_FILE: ${{ inputs.proxy_pool_file }}
-        run: |
-          set -euo pipefail
-          mkdir -p Results/diagnostics .mihomo-ga
-          . .venv/bin/activate
-          source_args=()
-          if [ -n "$PROXY_SUBSCRIPTION_URL" ]; then
-            source_args=(--url "$PROXY_SUBSCRIPTION_URL")
-          else
-            test -f "$PROXY_POOL_FILE"
-            source_args=(--config "$PROXY_POOL_FILE")
-          fi
-
-          python tools/setup_ga_subscription_proxy.py \
-            "${source_args[@]}" \
-            --node-slot "${{ matrix.attempt }}" \
-            --out-dir .mihomo-ga \
-            --http-port 17890 \
-            --socks-port 17891 \
-            --controller-port 19090 | tee Results/diagnostics/proxy_select.txt
-
-          # Pin the release asset used by the verified proxy runs. Querying the
-          # GitHub releases API independently from 20 jobs can hit the unauthenticated
-          # rate limit and drop a matrix slot before its live probe starts.
-          asset_url="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.28/mihomo-linux-amd64-v1-v1.19.28.gz"
-          echo "mihomo_asset=$asset_url" >> Results/diagnostics/proxy_select.txt
-          curl -fsSL "$asset_url" -o .mihomo-ga/mihomo.gz
-          gzip -dc .mihomo-ga/mihomo.gz > .mihomo-ga/mihomo
-          chmod +x .mihomo-ga/mihomo
-          nohup .mihomo-ga/mihomo -d .mihomo-ga -f .mihomo-ga/config.yaml > Results/diagnostics/mihomo.log 2>&1 &
-          echo "$!" > Results/diagnostics/mihomo.pid
-          sleep 2
-          for i in $(seq 1 20); do
-            if curl -fsS --max-time 8 -x http://127.0.0.1:17890 https://api.ipify.org > Results/diagnostics/proxy_public_ip.txt 2>>Results/diagnostics/proxy_curl.err; then
-              break
-            fi
-            sleep 2
-          done
-          proxy_ip="$(cat Results/diagnostics/proxy_public_ip.txt 2>/dev/null || true)"
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          selected = {}
-          try:
-              selected = json.loads(Path(".mihomo-ga/selected_proxy.json").read_text(encoding="utf-8"))
-          except Exception as exc:
-              selected = {"selected_error": repr(exc)}
-          proxy_ip = Path("Results/diagnostics/proxy_public_ip.txt").read_text(encoding="utf-8", errors="replace").strip() if Path("Results/diagnostics/proxy_public_ip.txt").exists() else ""
-          selected["proxy_public_ip"] = proxy_ip
-          selected["proxy_ready"] = bool(proxy_ip)
-          Path("Results/diagnostics/ga_proxy_egress.json").write_text(json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8")
-          print(json.dumps({"proxy_ready": bool(proxy_ip), "proxy_public_ip": proxy_ip, "selected_index": selected.get("selected_index"), "selected_name": selected.get("selected_name")}, ensure_ascii=False))
-          PY
-          cat Results/diagnostics/ga_proxy_egress.json
-          echo "OUTLOOK_PROXY_URL=http://127.0.0.1:17890" >> "$GITHUB_ENV"
-
-      - name: Stagger live target entry
-        if: ${{ inputs.coordinator_mode == 'off' && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' && fromJSON(inputs.slot_stagger_seconds) > 0 }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Wave stagger: only spread across max_parallel lanes so slot 36 does not
-          # wait (35 * stagger) after denylist already discarded many candidates.
-          attempt=${{ matrix.attempt }}
-          max_p=${{ fromJSON(inputs.max_parallel) }}
-          step=${{ fromJSON(inputs.slot_stagger_seconds) }}
-          if [ "$max_p" -lt 1 ]; then max_p=1; fi
-          wave=$(( (attempt - 1) % max_p ))
-          delay=$(( wave * step ))
-          echo "slot=$attempt wave=$wave max_parallel=$max_p stagger_seconds=$delay"
-          sleep "$delay"
-
-      - name: Record sanitized registration browser environment
-        if: ${{ steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        env:
-          GA_SLOT: ${{ matrix.attempt }}
-          GA_VARIANT: ${{ inputs.variant }}
-          GA_NETWORK_MODE: ${{ inputs.network_mode }}
-          GA_PUBLIC_IP: ${{ env.GA_PUBLIC_IP }}
-        run: |
-          set -euo pipefail
-          . .venv/bin/activate
-          python3 - <<'PY'
-          import hashlib
-          import importlib.metadata
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          release_variant = os.environ.get('GA_VARIANT', '').startswith('release_5s_success_')
-          source = Path(
-              'config.release-5s-success-ga.json'
-              if release_variant else
-              'config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json'
-          )
-          data = json.loads(source.read_text(encoding='utf-8'))
-          context = dict(data.get('context') or {})
-          cloak = dict(data.get('cloakbrowser') or {})
-          manifest = {
-              # This is intentionally a launchable, non-secret subset of the
-              # exact config. It contains no profile directory, AdsPower ID,
-              # cookie, proxy credential, or account identifier.
-              'context': context,
-              'cloakbrowser': cloak,
-              'patchright': {'use_cloakbrowser': bool((data.get('patchright') or {}).get('use_cloakbrowser'))},
-              'proxy': '',
-              'recovery_provenance': {
-                  'schema': 1,
-                  'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-                  'slot': os.environ.get('GA_SLOT', ''),
-                  'variant': os.environ.get('GA_VARIANT', ''),
-                  'network_mode': os.environ.get('GA_NETWORK_MODE', ''),
-                  'xvfb_screen': '1920x1200x24' if release_variant else '2560x1440x24',
-                  'cloakbrowser_version': importlib.metadata.version('cloakbrowser'),
-                  'source_config_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
-                  # Keep egress comparable without persisting an address in
-                  # the artifact; a proxy itself must be supplied separately.
-                  'egress_sha256': hashlib.sha256(os.environ.get('GA_PUBLIC_IP', '').encode()).hexdigest(),
-                  'proxy_was_configured': bool(data.get('proxy')) or bool(os.environ.get('OUTLOOK_PROXY_URL')),
-              },
-          }
-          out = Path('Results/diagnostics/registration_browser_env.json')
-          out.parent.mkdir(parents=True, exist_ok=True)
-          out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
-          # Safe confirmation only; do not print headers, UA, fingerprints, or
-          # any persistent-profile data into the public runner log.
-          print(json.dumps({'recorded': True, 'schema': 1, 'proxy_was_configured': manifest['recovery_provenance']['proxy_was_configured']}))
-          PY
-
-      - name: Reserve globally coordinated live entry
-        if: ${{ (inputs.coordinator_mode == 'entry' || inputs.coordinator_mode == 'entry_final') && inputs.network_mode == 'ga_own_ip' && steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        env:
-          GA_SLOT: ${{ matrix.attempt }}
-        run: |
-          set -euo pipefail
-          test -n "${GA_COORDINATOR_URL:-}"
-          test -n "${GA_COORDINATOR_TOKEN:-}"
-          mkdir -p Results/diagnostics
-          payload=$(python3 - <<'PY'
-          import json, os
-          print(json.dumps({
-              "stage": "entry",
-              "request_id": f"{os.environ['GITHUB_RUN_ID']}:{os.environ['GA_SLOT']}:entry",
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "slot": os.environ["GA_SLOT"],
-          }, separators=(",", ":")))
-          PY
-
-          )
-          response=$(curl -fsS --retry 4 --retry-all-errors --connect-timeout 8 --max-time 20 \
-            -A 'github-actions-ga-coordinator/1.0' \
-            -H "Authorization: Bearer ${GA_COORDINATOR_TOKEN}" \
-            -H 'Content-Type: application/json' \
-            --data "$payload" \
-            "${GA_COORDINATOR_URL%/}/v1/reservations")
-          printf '%s\n' "$response" | tee Results/diagnostics/ga_coordinator_entry.json
-          wait_ms=$(python3 -c 'import json,sys,time; print(max(0,int(json.load(sys.stdin)["scheduled_at_ms"])-int(time.time()*1000)))' <<<"$response")
-          echo "coordinator_wait_ms=$wait_ms slot=$GA_SLOT"
-          python3 -c 'import sys,time; time.sleep(max(0,int(sys.argv[1]))/1000)' "$wait_ms"
-
-      - name: Run no-proxy live probe on GA own IP
-        if: ${{ steps.egress.outputs.should_probe != 'false' }}
-        id: live
-        shell: bash
-        env:
-          PRE_FIRST_HOLD_WARMUP_POLICY: ${{ inputs.pre_first_hold_warmup_policy }}
-          PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
-          SIGNUP_COUNTRY_POLICY: ${{ inputs.signup_country_policy }}
-          SIGNUP_DOB_POLICY: ${{ inputs.signup_dob_policy }}
-          EMAIL_DOMAIN_POLICY: ${{ inputs.email_domain_policy }}
-          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS: ${{ inputs.fresh_absolute_timeout_seconds }}
-          OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS: ${{ inputs.variant == 'same_session_oauth_security_email_fresh1' && '1' || (inputs.variant == 'same_session_oauth_smoke' || inputs.variant == 'same_session_oauth_sunbrowser' || inputs.variant == 'same_session_oauth_security_email') && '0' || '' }}
-          OUTLOOK_SAME_SESSION_OAUTH: "1"
-          SECURITY_EMAIL_BINDING: ${{ (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') && '1' || '' }}
-          SECURITY_MAIL_API_KEY: ${{ (inputs.variant == 'same_session_oauth_security_email' || inputs.variant == 'same_session_oauth_security_email_fresh1') && secrets.SECURITY_MAIL_API_KEY || '' }}
-          FRESH_SESSION_RESTART_POLICY: ${{ inputs.fresh_session_restart_policy }}
-        run: |
-          set +e
-          mkdir -p Results/diagnostics
-          warmup_policy="$PRE_FIRST_HOLD_WARMUP_POLICY"
-          warmup_arm="fixed_input"
-          warmup_ms="$PRE_FIRST_HOLD_WARMUP_INPUT_MS"
-          warmup_profile_index=-1
-          warmup_profile_cycle=-1
-          case "$warmup_policy" in
-            fixed_input)
-              ;;
-            warmup_ab_14s_22s_v1)
-              # Balance the two timing arms across a repeating 35-slot block.
-              # A 100-slot run stays exactly 50/50 while repeated positions
-              # alternate treatment and control.
-              warmup_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
-              warmup_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
-              if [ $(( (warmup_profile_index + warmup_profile_cycle) % 2 )) -eq 0 ]; then
-                warmup_arm="warmup_14s_treatment"
-                warmup_ms="14000"
-              else
-                warmup_arm="warmup_22s_control"
-                warmup_ms="22000"
-              fi
-              ;;
-            warmup_14s_v1)
-              warmup_arm="warmup_14s_treatment"
-              warmup_ms="14000"
-              ;;
-            warmup_22s_v1)
-              warmup_arm="warmup_22s_control"
-              warmup_ms="22000"
-              ;;
-            *)
-              echo "unsupported pre-first-hold warmup policy: $warmup_policy" >&2
-              exit 2
-              ;;
-          esac
-          if [ -n "$warmup_ms" ]; then
-            if ! [[ "$warmup_ms" =~ ^[0-9]+$ ]] || [ "$warmup_ms" -gt 45000 ]; then
-              echo "pre-first-hold warmup must be blank or 0..45000ms" >&2
-              exit 2
-            fi
-          fi
-          experiment_count=0
-          [ "$warmup_policy" != "fixed_input" ] && experiment_count=$((experiment_count + 1))
-          [ "$SIGNUP_COUNTRY_POLICY" != "source_default" ] && experiment_count=$((experiment_count + 1))
-          [ "$SIGNUP_DOB_POLICY" != "source_default" ] && experiment_count=$((experiment_count + 1))
-          [ "$EMAIL_DOMAIN_POLICY" != "source_default" ] && experiment_count=$((experiment_count + 1))
-          if [ "$experiment_count" -gt 1 ]; then
-            echo "only one success-rate experiment may be enabled per run" >&2
-            exit 2
-          fi
-          export OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS="$warmup_ms"
-          WARMUP_POLICY="$warmup_policy" \
-          WARMUP_ARM="$warmup_arm" \
-          WARMUP_MS="$warmup_ms" \
-          WARMUP_PROFILE_INDEX="$warmup_profile_index" \
-          WARMUP_PROFILE_CYCLE="$warmup_profile_cycle" \
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          value = os.environ.get("WARMUP_MS", "")
-          row = {
-              "policy": os.environ["WARMUP_POLICY"],
-              "arm": os.environ["WARMUP_ARM"],
-              "effective_ms": int(value) if value else None,
-              "ads_profile_index_block": int(os.environ["WARMUP_PROFILE_INDEX"]),
-              "ads_profile_cycle_block": int(os.environ["WARMUP_PROFILE_CYCLE"]),
-              "applied_to_probe": True,
-          }
-          Path("Results/diagnostics/pre_first_hold_warmup.json").write_text(
-              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
-          )
-          print(json.dumps(row, ensure_ascii=False))
-          PY
-          country_policy="$SIGNUP_COUNTRY_POLICY"
-          country_arm="source_default"
-          country_code=""
-          country_profile_index=-1
-          country_profile_cycle=-1
-          case "$country_policy" in
-            source_default)
-              ;;
-            country_ab_us_lk_v1)
-              country_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
-              country_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
-              if [ $(( (country_profile_index + country_profile_cycle) % 2 )) -eq 0 ]; then
-                country_arm="country_us_treatment"
-                country_code="US"
-              else
-                country_arm="country_lk_control"
-                country_code="LK"
-              fi
-              ;;
-            country_us_v1)
-              country_arm="country_us_treatment"
-              country_code="US"
-              ;;
-            country_lk_v1)
-              country_arm="country_lk_control"
-              country_code="LK"
-              ;;
-            *)
-              echo "unsupported signup country policy: $country_policy" >&2
-              exit 2
-              ;;
-          esac
-          if [ -n "$country_code" ]; then
-            export OUTLOOK_SIGNUP_COUNTRY_CODE="$country_code"
-          else
-            unset OUTLOOK_SIGNUP_COUNTRY_CODE
-          fi
-          COUNTRY_POLICY="$country_policy" \
-          COUNTRY_ARM="$country_arm" \
-          COUNTRY_CODE="$country_code" \
-          COUNTRY_PROFILE_INDEX="$country_profile_index" \
-          COUNTRY_PROFILE_CYCLE="$country_profile_cycle" \
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          row = {
-              "policy": os.environ["COUNTRY_POLICY"],
-              "arm": os.environ["COUNTRY_ARM"],
-              "country_code": os.environ.get("COUNTRY_CODE") or None,
-              "ads_profile_index_block": int(os.environ["COUNTRY_PROFILE_INDEX"]),
-              "ads_profile_cycle_block": int(os.environ["COUNTRY_PROFILE_CYCLE"]),
-              "applied_to_probe": True,
-          }
-          Path("Results/diagnostics/signup_country_policy.json").write_text(
-              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
-          )
-          print(json.dumps(row, ensure_ascii=False))
-          PY
-          dob_policy="$SIGNUP_DOB_POLICY"
-          dob_arm="source_default"
-          dob_mode=""
-          dob_profile_index=-1
-          dob_profile_cycle=-1
-          case "$dob_policy" in
-            source_default)
-              ;;
-            dob_ab_random_default_v1)
-              dob_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
-              dob_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
-              if [ $(( (dob_profile_index + dob_profile_cycle) % 2 )) -eq 0 ]; then
-                dob_arm="dob_random_treatment"
-                dob_mode="random"
-              else
-                dob_arm="dob_jan1_control"
-                dob_mode="source_default"
-              fi
-              ;;
-            dob_random_v1)
-              dob_arm="dob_random_treatment"
-              dob_mode="random"
-              ;;
-            dob_default_v1)
-              dob_arm="dob_jan1_control"
-              dob_mode="source_default"
-              ;;
-            *)
-              echo "unsupported signup DOB policy: $dob_policy" >&2
-              exit 2
-              ;;
-          esac
-          if [ "$dob_mode" = "random" ]; then
-            python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          path = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json")
-          data = json.loads(path.read_text(encoding="utf-8"))
-          profile = data.setdefault("signup_fill_profile", {})
-          if not isinstance(profile, dict):
-              raise SystemExit("signup_fill_profile must be an object")
-          profile["birth_mode"] = "random"
-          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-          PY
-          fi
-          DOB_POLICY="$dob_policy" \
-          DOB_ARM="$dob_arm" \
-          DOB_MODE="$dob_mode" \
-          DOB_PROFILE_INDEX="$dob_profile_index" \
-          DOB_PROFILE_CYCLE="$dob_profile_cycle" \
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          row = {
-              "policy": os.environ["DOB_POLICY"],
-              "arm": os.environ["DOB_ARM"],
-              "mode": os.environ.get("DOB_MODE") or None,
-              "ads_profile_index_block": int(os.environ["DOB_PROFILE_INDEX"]),
-              "ads_profile_cycle_block": int(os.environ["DOB_PROFILE_CYCLE"]),
-              "applied_to_probe": True,
-          }
-          Path("Results/diagnostics/signup_dob_policy.json").write_text(
-              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
-          )
-          print(json.dumps(row, ensure_ascii=False))
-          PY
-          domain_policy="$EMAIL_DOMAIN_POLICY"
-          domain_arm="source_default"
-          email_suffix=""
-          domain_profile_index=-1
-          domain_profile_cycle=-1
-          case "$domain_policy" in
-            source_default)
-              ;;
-            domain_ab_hotmail_outlook_v1)
-              domain_profile_index=$(( (${{ matrix.attempt }} - 1) % 35 ))
-              domain_profile_cycle=$(( (${{ matrix.attempt }} - 1) / 35 ))
-              if [ $(( (domain_profile_index + domain_profile_cycle) % 2 )) -eq 0 ]; then
-                domain_arm="hotmail_treatment"
-                email_suffix="@hotmail.com"
-              else
-                domain_arm="outlook_control"
-                email_suffix="@outlook.com"
-              fi
-              ;;
-            domain_hotmail_v1)
-              domain_arm="hotmail_treatment"
-              email_suffix="@hotmail.com"
-              ;;
-            domain_outlook_v1)
-              domain_arm="outlook_control"
-              email_suffix="@outlook.com"
-              ;;
-            *)
-              echo "unsupported email domain policy: $domain_policy" >&2
-              exit 2
-              ;;
-          esac
-          if [ -n "$email_suffix" ]; then
-            EMAIL_SUFFIX="$email_suffix" python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          suffix = os.environ["EMAIL_SUFFIX"]
-          if suffix not in {"@hotmail.com", "@outlook.com"}:
-              raise SystemExit("unsupported email suffix")
-          path = Path("config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json")
-          data = json.loads(path.read_text(encoding="utf-8"))
-          data["email_suffix"] = suffix
-          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-          PY
-          fi
-          DOMAIN_POLICY="$domain_policy" \
-          DOMAIN_ARM="$domain_arm" \
-          EMAIL_SUFFIX="$email_suffix" \
-          DOMAIN_PROFILE_INDEX="$domain_profile_index" \
-          DOMAIN_PROFILE_CYCLE="$domain_profile_cycle" \
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          suffix = os.environ.get("EMAIL_SUFFIX") or None
-          row = {
-              "policy": os.environ["DOMAIN_POLICY"],
-              "arm": os.environ["DOMAIN_ARM"],
-              "domain": suffix[1:] if suffix else None,
-              "ads_profile_index_block": int(os.environ["DOMAIN_PROFILE_INDEX"]),
-              "ads_profile_cycle_block": int(os.environ["DOMAIN_PROFILE_CYCLE"]),
-              "applied_to_probe": True,
-          }
-          Path("Results/diagnostics/email_domain_policy.json").write_text(
-              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
-          )
-          print(json.dumps(row, ensure_ascii=False))
-          PY
-          private_console="Results/diagnostics/public_runner_private_console.log"
-          echo "GA_OWN_IP_ATTEMPT=${{ matrix.attempt }}"
-          echo "NETWORK_MODE=${{ inputs.network_mode }}"
-          echo "pre_first_hold_warmup_policy=$warmup_policy arm=$warmup_arm"
-          echo "OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS=${OUTLOOK_CAPTCHA_PRE_FIRST_HOLD_WARMUP_MS:-config-default}"
-          echo "signup_country_policy=$country_policy arm=$country_arm code=${OUTLOOK_SIGNUP_COUNTRY_CODE:-source-default}"
-          echo "signup_dob_policy=$dob_policy arm=$dob_arm mode=${dob_mode:-source-default}"
-          echo "email_domain_policy=$domain_policy arm=$domain_arm domain=${email_suffix:-source-default}"
-          echo "per_ip_max_registrations=${{ inputs.per_ip_max_registrations }}"
-          variant="${{ inputs.variant }}"
-          echo "probe_timeout_minutes=${{ inputs.probe_timeout_minutes }}"
-          echo "fresh_absolute_timeout_seconds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_ABSOLUTE_TIMEOUT_SECONDS}"
-          echo "fresh_rechallenge_rounds=${OUTLOOK_SIGNUP_PROTOCOL_TAKEOVER_FRESH_RECHALLENGE_ROUNDS:-source-default}"
-          echo "fresh_session_restart_policy=${FRESH_SESSION_RESTART_POLICY}"
-          if [ "$variant" = "paired_5s_then_thin" ] || [ "$variant" = "paired_thin_then_5s" ]; then
-            if [ "${{ inputs.per_ip_max_registrations }}" -ne 1 ]; then
-              echo "paired variants require per_ip_max_registrations=1" >&2
-              exit 2
-            fi
-            if [ "$variant" = "paired_5s_then_thin" ]; then
-              labels=(five_seconds thin)
-              commands=(./run_xvfb_semiprotocol_5s_1920.sh ./run_xvfb_natural_1920.sh)
-            else
-              labels=(thin five_seconds)
-              commands=(./run_xvfb_natural_1920.sh ./run_xvfb_semiprotocol_5s_1920.sh)
-            fi
-            : > "$private_console"
-            ec=0
-            for i in 0 1; do
-              echo "[PUBLIC_AB] begin order=$i variant=${labels[$i]}" | tee -a "$private_console"
-              timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${commands[$i]}" \
-                >>"$private_console" 2>&1
-              one_ec=$?
-              echo "[PUBLIC_AB] end order=$i variant=${labels[$i]} exit_code=$one_ec" | tee -a "$private_console"
-              if [ "$one_ec" = "124" ]; then
-                echo "paired_${labels[$i]}_probe_timeout" > "Results/diagnostics/paired_${labels[$i]}_probe_timeout.txt"
-              fi
-            done
-          else
-            cmd=()
-            if [ "$variant" = "semiprotocol_5s_stable" ]; then
-              cmd=(./run_xvfb_semiprotocol_5s_1920.sh)
-            elif [ "$variant" = "sunbrowser_thin_natural" ] || [ "$variant" = "same_session_oauth_sunbrowser" ] || [ "$variant" = "same_session_oauth_security_email" ] || [ "$variant" = "same_session_oauth_security_email_fresh1" ]; then
-              cmd=(./run_xvfb_sunbrowser_natural_1920.sh)
-            elif [ "$variant" = "semiprotocol_5s_historical_firstpass" ]; then
-              cmd=(./run_xvfb_semiprotocol_5s_historical_firstpass_1920.sh)
-            elif [ "$variant" = "semiprotocol_5s_histfp_no_inject_knp" ]; then
-              cmd=(./run_xvfb_semiprotocol_5s_histfp_no_inject_knp_1920.sh)
-            elif [ "$variant" = "release_5s_success_baseline" ]; then
-              cmd=(./run_xvfb_release_5s_success_baseline.sh)
-            elif [ "$variant" = "release_5s_success_attempt2" ]; then
-              cmd=(./run_xvfb_release_5s_success_attempt2.sh)
-            elif [ "$variant" = "ui_natural" ]; then
-              cmd=(./run_xvfb_ui_natural_1920.sh)
-            elif [ "$variant" = "natural_legacy" ]; then
-              cmd=(./run_xvfb_natural_legacy_1920.sh)
-            elif [ "$variant" = "historical_ga_success_default" ] || [ "$variant" = "historical_ga_highrate_336a973" ] || [ "$variant" = "historical_ga_fresh_rechallenge" ] || [ "$variant" = "same_session_oauth_smoke" ] || [ "$variant" = "offline_ads_like_ga_fresh_rechallenge" ] || [ "$variant" = "offline_ads_pool_ga_fresh_rechallenge" ]; then
-              cmd=(./run_xvfb_natural_1920.sh)
-            else
-              cmd=(./run_xvfb_natural_1920.sh)
-            fi
-            if [ "${{ inputs.per_ip_max_registrations }}" -gt 1 ]; then
-              python3 tools/run_ga_ip_capacity_loop.py \
-                --variant "$variant" \
-                --max-registrations "${{ inputs.per_ip_max_registrations }}" \
-                --probe-timeout-minutes "${{ inputs.probe_timeout_minutes }}" \
-                >"$private_console" 2>&1
-              ec=$?
-            elif [[ ( "$variant" = "same_session_oauth_smoke" || "$variant" = "same_session_oauth_sunbrowser" || "$variant" = "same_session_oauth_security_email" || "$variant" = "same_session_oauth_security_email_fresh1" ) && "$FRESH_SESSION_RESTART_POLICY" != "off" ]]; then
-              session_policy="$FRESH_SESSION_RESTART_POLICY"
-              session_arm="restart_treatment"
-              if [ "$session_policy" = "fresh_ab_v1" ] && [ $(( ${{ matrix.attempt }} % 2 )) -eq 0 ]; then
-                session_arm="single_session_control"
-              elif [ "$session_policy" != "fresh_ab_v1" ] && [ "$session_policy" != "fresh_all_v1" ]; then
-                echo "unsupported fresh session restart policy: $session_policy" >&2
-                exit 2
-              fi
-              # The 60-second restart experiment was rejected for production.
-              # Keep its exact replay behavior without spending another scarce
-              # workflow_dispatch input on an unpromoted tuning scalar.
-              cooldown="60"
-
-              first_log="Results/diagnostics/fresh_session_first.log"
-              second_log="Results/diagnostics/fresh_session_second.log"
-              : > "$private_console"
-              echo "[SESSION_RESTART] first begin arm=$session_arm" >> "$private_console"
-              timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
-                >"$first_log" 2>&1
-              first_ec=$?
-              cat "$first_log" >> "$private_console"
-              echo "[SESSION_RESTART] first end exit_code=$first_ec" >> "$private_console"
-              first_fresh=0
-              first_strict=0
-              restart_attempted=0
-              second_ec=""
-              second_strict=0
-              second_fresh=0
-              second_riskblock=0
-              grep -q 'fresh rechallenge skipped by production policy rounds=0' "$first_log" && first_fresh=1
-              grep -q 'CreateAccount strict success' "$first_log" && first_strict=1
-
-              ec=$first_ec
-              if [ "$session_arm" = "restart_treatment" ] && [ "$first_fresh" -eq 1 ]; then
-                restart_attempted=1
-                echo "[SESSION_RESTART] cooldown_seconds=$cooldown" >> "$private_console"
-                sleep "$cooldown"
-                echo "[SESSION_RESTART] second begin" >> "$private_console"
-                GA_COORDINATOR_SLOT="${{ matrix.attempt }}-session2" \
-                  timeout --foreground 12m "${cmd[@]}" >"$second_log" 2>&1
-                second_ec=$?
-                cat "$second_log" >> "$private_console"
-                echo "[SESSION_RESTART] second end exit_code=$second_ec" >> "$private_console"
-                grep -q 'CreateAccount strict success' "$second_log" && second_strict=1
-                grep -q 'fresh rechallenge skipped by production policy rounds=0' "$second_log" && second_fresh=1
-                grep -qi 'riskblock' "$second_log" && second_riskblock=1
-                ec=$second_ec
-              fi
-
-              if [ "$first_ec" = "124" ] || [ "$second_ec" = "124" ]; then
-                echo "probe_timeout" > Results/diagnostics/probe_timeout.txt
-              fi
-              SESSION_POLICY="$session_policy" \
-              SESSION_ARM="$session_arm" \
-              SESSION_COOLDOWN="$cooldown" \
-              FIRST_EXIT_CODE="$first_ec" \
-              FIRST_FRESH="$first_fresh" \
-              FIRST_STRICT="$first_strict" \
-              RESTART_ATTEMPTED="$restart_attempted" \
-              SECOND_EXIT_CODE="$second_ec" \
-              SECOND_STRICT="$second_strict" \
-              SECOND_FRESH="$second_fresh" \
-              SECOND_RISKBLOCK="$second_riskblock" \
-              python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          def as_bool(name):
-              return os.environ.get(name) == "1"
-
-          second_exit = os.environ.get("SECOND_EXIT_CODE", "")
-          row = {
-              "policy": os.environ["SESSION_POLICY"],
-              "arm": os.environ["SESSION_ARM"],
-              "cooldown_seconds": int(os.environ["SESSION_COOLDOWN"]),
-              "first_exit_code": int(os.environ["FIRST_EXIT_CODE"]),
-              "first_fresh_policy_skip": as_bool("FIRST_FRESH"),
-              "first_strict_marker": as_bool("FIRST_STRICT"),
-              "restart_attempted": as_bool("RESTART_ATTEMPTED"),
-              "second_exit_code": int(second_exit) if second_exit else None,
-              "second_strict_marker": as_bool("SECOND_STRICT"),
-              "second_fresh_policy_skip": as_bool("SECOND_FRESH"),
-              "second_riskblock_marker": as_bool("SECOND_RISKBLOCK"),
-              "recovered_strict": as_bool("RESTART_ATTEMPTED") and as_bool("SECOND_STRICT"),
-          }
-          Path("Results/diagnostics/fresh_session_restart.json").write_text(
-              json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8"
-          )
-          print(json.dumps(row, ensure_ascii=False))
-          PY
-            else
-              timeout --foreground "${{ inputs.probe_timeout_minutes }}m" "${cmd[@]}" \
-                >"$private_console" 2>&1
-              ec=$?
-              if [ "$ec" = "124" ]; then
-                echo "[GAOwnIP] probe timed out after ${{ inputs.probe_timeout_minutes }}m"
-                echo "probe_timeout" > Results/diagnostics/probe_timeout.txt
-              fi
-            fi
-          fi
-          if grep -q 'fresh rechallenge skipped by production policy rounds=0' "$private_console" 2>/dev/null; then
-            : > Results/diagnostics/fresh_rechallenge_policy_skip.txt
-          fi
-          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
-          echo "public_safe_probe_summary:"
-          grep -E "\[PUBLIC_AB\]|outlook_register result=|riskblock|collector_minus1|real final result\|-1|CreateAccount strict success|probe timed out|fresh rechallenge skipped by production policy|fresh rechallenge absolute timeout|fresh rechallenge no progress|fresh rechallenge idle timeout" "$private_console" 2>/dev/null \
-            | sed -E 's/[[:alnum:]._%+-]+@(outlook|hotmail)\.com/<redacted-email>/g' \
-            | tail -40 || true
-          # Matrix attempts are allowed to fail individually. The summarize job
-          # evaluates redacted per-slot verdicts and rejects technical failures
-          # or an all-IP-blocked run with no decisive non-IP checkpoint.
-          exit 0
-
-      - name: Summarize attempt without publishing credentials
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          set +e
-          echo "## GA attempt ${{ matrix.attempt }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "variant=${{ inputs.variant }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "probe_exit_code=${{ steps.live.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
-          latest=$(ls -t Results/network/*.jsonl 2>/dev/null | head -n1 || true)
-          if [ -n "$latest" ]; then
-            . .venv/bin/activate
-            python classify_protocol_run.py "$latest" > /tmp/private_classification.json 2>/dev/null || true
-            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-          p = Path('/tmp/private_classification.json')
-          if p.exists():
-              try:
-                  row = json.loads(p.read_text(encoding='utf-8'))
-              except Exception:
-                  row = {}
-              safe = {k: row.get(k) for k in (
-                  'verdict', 'create_200', 'create_request', 'riskblock',
-                  'human_loaded', 'human_success', 'captcha_close_minus1',
-                  'score0_no_result0_timeout', 'iframe_bootstrap_stall',
-                  'button_locate_timeout', 'live_timeout',
-                  'strict_success', 'proof_accepted', 'technical_pass',
-                  'ip_limited_after_proof', 'repeated_risk_challenge',
-                  'outcome_class'
-              )}
-              print('```json')
-              print(json.dumps(safe, ensure_ascii=False, indent=2))
-              print('```')
-          PY
-          fi
-
-      - name: Import successful account into outlookEmail
-        if: ${{ always() && steps.egress.outputs.should_probe != 'false' }}
-        shell: bash
-        env:
-          # Keep the ingestion credential out of the probe and every other
-          # process launched from the checked-out private source.
-          OUTLOOK_EMAIL_BASE_URL: ${{ vars.OUTLOOK_EMAIL_BASE_URL }}
-          OUTLOOK_EMAIL_API_KEY: ${{ secrets.OUTLOOK_EMAIL_API_KEY }}
-        run: |
-          set +e
-          mkdir -p Results/diagnostics
-          safe_result="Results/diagnostics/outlook_email_ingest.json"
-          request_file="${RUNNER_TEMP}/outlook-email-ingest-request-${{ matrix.attempt }}.json"
-          response_file="${RUNNER_TEMP}/outlook-email-ingest-response-${{ matrix.attempt }}.json"
-          rm -f "$request_file" "$response_file"
-          trap 'rm -f "$request_file" "$response_file"' EXIT
-          if [ -z "${OUTLOOK_EMAIL_BASE_URL:-}" ] || [ -z "${OUTLOOK_EMAIL_API_KEY:-}" ]; then
-            printf '%s\n' '{"attempted":false,"reason":"integration_not_configured"}' > "$safe_result"
-            exit 0
-          fi
-          case "$OUTLOOK_EMAIL_BASE_URL" in
-            https://*) ;;
-            *)
-              printf '%s\n' '{"attempted":false,"reason":"invalid_https_base_url"}' > "$safe_result"
-              exit 0
-              ;;
-          esac
-          token_file="Results/outlook_token.json"
-          source_file=""
-          if [ ! -s "$token_file" ]; then
-            for candidate in Results/unlogged_email.txt Results/logged_email.txt; do
-              if [ -s "$candidate" ]; then source_file="$candidate"; break; fi
-            done
-          fi
-          if [ ! -s "$token_file" ] && [ -z "$source_file" ]; then
-            printf '%s\n' '{"attempted":false,"reason":"no_registered_account"}' > "$safe_result"
-            exit 0
-          fi
-          if ! TOKEN_FILE="$token_file" SOURCE_FILE="$source_file" REQUEST_FILE="$request_file" python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          token_path = Path(os.environ['TOKEN_FILE'])
-          if token_path.is_file() and token_path.stat().st_size:
-              row = json.loads(token_path.read_text(encoding='utf-8'))
-              if row.get('schema') != 1 or row.get('mode') != 'graph':
-                  raise SystemExit('invalid token artifact schema')
-              required = ('email', 'password', 'client_id', 'refresh_token')
-              if any(not str(row.get(key) or '').strip() for key in required):
-                  raise SystemExit('incomplete token artifact')
-              request = {key: row[key] for key in required}
-              request.update({
-                  'mode': 'graph',
-                  'remark': 'ga-run-${{ github.run_id }}-slot-${{ matrix.attempt }}',
-                  '_ingest_mode': 'token',
-              })
-          else:
-              lines = [
-                  x.strip() for x in Path(os.environ['SOURCE_FILE']).read_text(encoding='utf-8').splitlines()
-                  if x.strip()
-              ]
-              email, sep, password = lines[-1].partition(': ')
-              if not sep or '@' not in email or not password:
-                  raise SystemExit('invalid private result format')
-              request = {
-                  'email': email.strip(),
-                  'password': password,
-                  'remark': 'ga-run-${{ github.run_id }}-slot-${{ matrix.attempt }}',
-                  '_ingest_mode': 'staging_only',
-              }
-          # Destination metadata: the group always applies, the verified-binding
-          # tag only when this slot actually proved the security email.
-          metadata = {}
-          for chunk in str(os.environ.get('INGEST_METADATA') or '').replace(',', ';').split(';'):
-              key, sep, value = chunk.partition('=')
-              if sep:
-                  metadata[key.strip().lower()] = value.strip()
-          if metadata.get('group_id', '').isdigit():
-              request['group_id'] = int(metadata['group_id'])
-          tag_ids = [int(part) for part in metadata.get('tag_ids', '').replace(' ', ',').split(',') if part.isdigit()]
-          if tag_ids:
-              binding_verified = False
-              try:
-                  binding_verified = json.loads(
-                      Path('Results/diagnostics/security_email_binding.json').read_text(encoding='utf-8')
-                  ).get('binding_verified') is True
-              except Exception:
-                  binding_verified = False
-              if binding_verified:
-                  request['tag_ids'] = tag_ids
-          Path(os.environ['REQUEST_FILE']).write_text(
-              json.dumps(request, separators=(',', ':')), encoding='utf-8'
-          )
-          PY
-          then
-            printf '%s\n' '{"attempted":true,"success":false,"reason":"invalid_private_result"}' > "$safe_result"
-            exit 0
-          fi
-          ingest_mode=$(REQUEST_FILE="$request_file" python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          row = json.loads(Path(os.environ['REQUEST_FILE']).read_text(encoding='utf-8'))
-          print(row.pop('_ingest_mode'))
-          Path(os.environ['REQUEST_FILE']).write_text(
-              json.dumps(row, separators=(',', ':')), encoding='utf-8'
-          )
-          PY
-          )
-          if [ "$ingest_mode" = "token" ]; then
-            endpoint="import-token"
-            retry_delays=(0 30 60 120 180)
-            max_retries=5
-          else
-            endpoint="upload"
-            retry_delays=(0 5 15)
-            max_retries=3
-          fi
-          success=false
-          for retry in $(seq 1 "$max_retries"); do
-            if [ "$retry" -gt 1 ]; then
-              sleep "${retry_delays[$((retry - 1))]}"
-            fi
-            rm -f "$response_file"
-            http_code=$(curl -sS --connect-timeout 10 --max-time 120 \
-              -o "$response_file" -w '%{http_code}' \
-              -H "X-API-Key: ${OUTLOOK_EMAIL_API_KEY}" \
-              -H 'Content-Type: application/json' \
-              --data-binary @"$request_file" \
-              "${OUTLOOK_EMAIL_BASE_URL%/}/api/external/outlook/${endpoint}" || true)
-            HTTP_CODE="$http_code" RETRY="$retry" INGEST_MODE="$ingest_mode" RESPONSE_FILE="$response_file" python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          try:
-              row = json.loads(Path(os.environ['RESPONSE_FILE']).read_text(encoding='utf-8'))
-          except Exception:
-              row = {}
-          http_code = os.environ.get('HTTP_CODE', '')
-          ok = http_code.isdigit() and 200 <= int(http_code) < 300 and row.get('success') is True
-          allowed_error_codes = {
-              'input_invalid', 'token_validation_failed',
-              'graph_probe_failed', 'platform_config_error',
-          }
-          error_code = str(row.get('error_code') or '')
-          if error_code not in allowed_error_codes:
-              error_code = None
-          safe = {
-              'attempted': True,
-              'success': ok,
-              'ingest_mode': os.environ.get('INGEST_MODE'),
-              'http_code': http_code,
-              'retry': int(os.environ.get('RETRY', '0')),
-              'account_id': row.get('account_id') if ok else None,
-              'created': row.get('created') if ok else None,
-              'error_code': error_code if not ok else None,
-          }
-          Path('Results/diagnostics/outlook_email_ingest.json').write_text(
-              json.dumps(safe, ensure_ascii=False, indent=2), encoding='utf-8'
-          )
-          if ok:
-              raise SystemExit(0)
-          raise SystemExit(
-              75
-              if os.environ.get('INGEST_MODE') == 'token' and error_code == 'graph_probe_failed'
-              else 1
-          )
-          PY
-            parse_ec=$?
-            if [ "$parse_ec" -eq 0 ]; then
-              success=true
-              break
-            fi
-            if [ "$parse_ec" -eq 75 ]; then
-              echo "outlookEmail Graph probe not ready; retry=$retry/$max_retries"
-              continue
-            fi
-            case "$http_code" in
-              000|404|408|425|429|5??) continue ;;
-              *) break ;;
-            esac
-          done
-          echo "outlookEmail integration attempted success=$success"
-          exit 0
-
-      - name: Build redacted machine-readable verdict
-        if: ${{ always() }}
-        shell: bash
-        env:
-          ATTEMPT: ${{ matrix.attempt }}
-          VARIANT: ${{ inputs.variant }}
-          NETWORK_MODE: ${{ inputs.network_mode }}
-          RUNNER_LABEL: ${{ inputs.runner }}
-          ORCHESTRATION_ID: ${{ inputs.orchestration_id }}
-          FRESH_SESSION_RESTART_POLICY_INPUT: ${{ inputs.fresh_session_restart_policy }}
-          PRE_FIRST_HOLD_WARMUP_POLICY_INPUT: ${{ inputs.pre_first_hold_warmup_policy }}
-          PRE_FIRST_HOLD_WARMUP_INPUT_MS: ${{ inputs.pre_first_hold_warmup_ms }}
-          SIGNUP_COUNTRY_POLICY_INPUT: ${{ inputs.signup_country_policy }}
-          SIGNUP_DOB_POLICY_INPUT: ${{ inputs.signup_dob_policy }}
-          EMAIL_DOMAIN_POLICY_INPUT: ${{ inputs.email_domain_policy }}
-          COORDINATOR_MODE: ${{ inputs.coordinator_mode }}
-          MAX_PARALLEL: ${{ inputs.max_parallel }}
-          RUNTIME_MODE: ${{ inputs.runtime_mode }}
-          PROBE_TIMEOUT_MINUTES: ${{ inputs.probe_timeout_minutes }}
-          JOB_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
-          PER_IP_MAX_REGISTRATIONS: ${{ inputs.per_ip_max_registrations }}
-          PROBE_EXIT_CODE: ${{ steps.live.outputs.exit_code }}
-        run: |
-          set +e
-          mkdir -p public-safe-verdict
-          latest=$(ls -t Results/network/*.jsonl 2>/dev/null | head -n1 || true)
-          if [ -n "$latest" ] && [ -f classify_protocol_run.py ]; then
-            . .venv/bin/activate 2>/dev/null || true
-            python classify_protocol_run.py "$latest" > /tmp/private_classification.json 2>/dev/null || true
-          fi
-          python - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          def load_json(path):
-              try:
-                  return json.loads(Path(path).read_text(encoding="utf-8"))
-              except Exception:
-                  return {}
-
-          row = load_json("/tmp/private_classification.json")
-          ingest = load_json("Results/diagnostics/outlook_email_ingest.json")
-          same_session_oauth = load_json("Results/diagnostics/same_session_oauth.json")
-          security_email_binding = load_json("Results/diagnostics/security_email_binding.json")
-          session_restart = load_json("Results/diagnostics/fresh_session_restart.json")
-          warmup = load_json("Results/diagnostics/pre_first_hold_warmup.json")
-          signup_country = load_json("Results/diagnostics/signup_country_policy.json")
-          signup_dob = load_json("Results/diagnostics/signup_dob_policy.json")
-          email_domain = load_json("Results/diagnostics/email_domain_policy.json")
-          skipped = Path("Results/diagnostics/egress_skip.txt").exists()
-          timed_out = Path("Results/diagnostics/probe_timeout.txt").exists()
-          fresh_absolute_timed_out = Path(
-              "Results/diagnostics/fresh_rechallenge_absolute_timeout.jsonl"
-          ).exists()
-          fresh_idle_timed_out = Path(
-              "Results/diagnostics/fresh_rechallenge_idle_timeout.jsonl"
-          ).exists()
-          fresh_policy_skipped = Path(
-              "Results/diagnostics/fresh_rechallenge_policy_skip.txt"
-          ).exists()
-
-          fresh_session_restart_policy = os.environ.get(
-              "FRESH_SESSION_RESTART_POLICY_INPUT", ""
-          )
-          if fresh_session_restart_policy not in {"off", "fresh_ab_v1", "fresh_all_v1"}:
-              fresh_session_restart_policy = None
-          fresh_session_restart_arm = str(session_restart.get("arm") or "") or None
-          if fresh_session_restart_arm not in {
-              None, "restart_treatment", "single_session_control"
-          }:
-              fresh_session_restart_arm = None
-          if fresh_session_restart_arm is None:
-              try:
-                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
-              except ValueError:
-                  matrix_slot = 0
-              if fresh_session_restart_policy == "fresh_ab_v1" and matrix_slot > 0:
-                  fresh_session_restart_arm = (
-                      "restart_treatment" if matrix_slot % 2 else "single_session_control"
-                  )
-              elif fresh_session_restart_policy == "fresh_all_v1":
-                  fresh_session_restart_arm = "restart_treatment"
-          fresh_session_restart_attempted = session_restart.get("restart_attempted") is True
-          fresh_session_first_fresh = session_restart.get("first_fresh_policy_skip") is True
-          fresh_session_recovered_strict = session_restart.get("recovered_strict") is True
-          fresh_session_second_fresh = session_restart.get("second_fresh_policy_skip") is True
-          fresh_session_second_riskblock = session_restart.get("second_riskblock_marker") is True
-
-          pre_first_hold_warmup_policy = os.environ.get(
-              "PRE_FIRST_HOLD_WARMUP_POLICY_INPUT", ""
-          )
-          if pre_first_hold_warmup_policy not in {
-              "fixed_input", "warmup_ab_14s_22s_v1",
-              "warmup_14s_v1", "warmup_22s_v1",
-          }:
-              pre_first_hold_warmup_policy = None
-          pre_first_hold_warmup_arm = str(warmup.get("arm") or "") or None
-          if pre_first_hold_warmup_arm not in {
-              None, "fixed_input", "warmup_14s_treatment", "warmup_22s_control",
-          }:
-              pre_first_hold_warmup_arm = None
-          try:
-              pre_first_hold_warmup_ms = int(warmup["effective_ms"])
-          except (KeyError, TypeError, ValueError):
-              pre_first_hold_warmup_ms = None
-          if pre_first_hold_warmup_ms is not None and not (
-              0 <= pre_first_hold_warmup_ms <= 45000
-          ):
-              pre_first_hold_warmup_ms = None
-          pre_first_hold_warmup_applied = warmup.get("applied_to_probe") is True
-          if pre_first_hold_warmup_arm is None:
-              try:
-                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
-              except ValueError:
-                  matrix_slot = 0
-              if pre_first_hold_warmup_policy == "warmup_ab_14s_22s_v1" and matrix_slot > 0:
-                  profile_index = (matrix_slot - 1) % 35
-                  profile_cycle = (matrix_slot - 1) // 35
-                  if (profile_index + profile_cycle) % 2 == 0:
-                      pre_first_hold_warmup_arm = "warmup_14s_treatment"
-                      pre_first_hold_warmup_ms = 14000
-                  else:
-                      pre_first_hold_warmup_arm = "warmup_22s_control"
-                      pre_first_hold_warmup_ms = 22000
-              elif pre_first_hold_warmup_policy == "warmup_14s_v1":
-                  pre_first_hold_warmup_arm = "warmup_14s_treatment"
-                  pre_first_hold_warmup_ms = 14000
-              elif pre_first_hold_warmup_policy == "warmup_22s_v1":
-                  pre_first_hold_warmup_arm = "warmup_22s_control"
-                  pre_first_hold_warmup_ms = 22000
-              elif pre_first_hold_warmup_policy == "fixed_input":
-                  pre_first_hold_warmup_arm = "fixed_input"
-                  try:
-                      value = os.environ.get("PRE_FIRST_HOLD_WARMUP_INPUT_MS", "")
-                      pre_first_hold_warmup_ms = int(value) if value else None
-                  except ValueError:
-                      pre_first_hold_warmup_ms = None
-
-          signup_country_policy = os.environ.get("SIGNUP_COUNTRY_POLICY_INPUT", "")
-          if signup_country_policy not in {
-              "source_default", "country_ab_us_lk_v1",
-              "country_us_v1", "country_lk_v1",
-          }:
-              signup_country_policy = None
-          signup_country_arm = str(signup_country.get("arm") or "") or None
-          if signup_country_arm not in {
-              None, "source_default", "country_us_treatment", "country_lk_control",
-          }:
-              signup_country_arm = None
-          signup_country_code = str(signup_country.get("country_code") or "") or None
-          if signup_country_code not in {None, "US", "LK"}:
-              signup_country_code = None
-          signup_country_applied = signup_country.get("applied_to_probe") is True
-          if signup_country_arm is None:
-              try:
-                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
-              except ValueError:
-                  matrix_slot = 0
-              if signup_country_policy == "country_ab_us_lk_v1" and matrix_slot > 0:
-                  profile_index = (matrix_slot - 1) % 35
-                  profile_cycle = (matrix_slot - 1) // 35
-                  if (profile_index + profile_cycle) % 2 == 0:
-                      signup_country_arm = "country_us_treatment"
-                      signup_country_code = "US"
-                  else:
-                      signup_country_arm = "country_lk_control"
-                      signup_country_code = "LK"
-              elif signup_country_policy == "country_us_v1":
-                  signup_country_arm = "country_us_treatment"
-                  signup_country_code = "US"
-              elif signup_country_policy == "country_lk_v1":
-                  signup_country_arm = "country_lk_control"
-                  signup_country_code = "LK"
-              elif signup_country_policy == "source_default":
-                  signup_country_arm = "source_default"
-                  signup_country_code = None
-
-          signup_dob_policy = os.environ.get("SIGNUP_DOB_POLICY_INPUT", "")
-          if signup_dob_policy not in {
-              "source_default", "dob_ab_random_default_v1",
-              "dob_random_v1", "dob_default_v1",
-          }:
-              signup_dob_policy = None
-          signup_dob_arm = str(signup_dob.get("arm") or "") or None
-          if signup_dob_arm not in {
-              None, "source_default", "dob_random_treatment", "dob_jan1_control",
-          }:
-              signup_dob_arm = None
-          signup_dob_mode = str(signup_dob.get("mode") or "") or None
-          if signup_dob_mode not in {None, "random", "source_default"}:
-              signup_dob_mode = None
-          signup_dob_applied = signup_dob.get("applied_to_probe") is True
-          if signup_dob_arm is None:
-              try:
-                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
-              except ValueError:
-                  matrix_slot = 0
-              if signup_dob_policy == "dob_ab_random_default_v1" and matrix_slot > 0:
-                  profile_index = (matrix_slot - 1) % 35
-                  profile_cycle = (matrix_slot - 1) // 35
-                  if (profile_index + profile_cycle) % 2 == 0:
-                      signup_dob_arm = "dob_random_treatment"
-                      signup_dob_mode = "random"
-                  else:
-                      signup_dob_arm = "dob_jan1_control"
-                      signup_dob_mode = "source_default"
-              elif signup_dob_policy == "dob_random_v1":
-                  signup_dob_arm = "dob_random_treatment"
-                  signup_dob_mode = "random"
-              elif signup_dob_policy == "dob_default_v1":
-                  signup_dob_arm = "dob_jan1_control"
-                  signup_dob_mode = "source_default"
-              elif signup_dob_policy == "source_default":
-                  signup_dob_arm = "source_default"
-                  signup_dob_mode = None
-
-          email_domain_policy = os.environ.get("EMAIL_DOMAIN_POLICY_INPUT", "")
-          if email_domain_policy not in {
-              "source_default", "domain_ab_hotmail_outlook_v1",
-              "domain_hotmail_v1", "domain_outlook_v1",
-          }:
-              email_domain_policy = None
-          email_domain_arm = str(email_domain.get("arm") or "") or None
-          if email_domain_arm not in {
-              None, "source_default", "hotmail_treatment", "outlook_control",
-          }:
-              email_domain_arm = None
-          email_domain_value = str(email_domain.get("domain") or "") or None
-          if email_domain_value not in {None, "hotmail.com", "outlook.com"}:
-              email_domain_value = None
-          email_domain_applied = email_domain.get("applied_to_probe") is True
-          if email_domain_arm is None:
-              try:
-                  matrix_slot = int(os.environ.get("ATTEMPT", "0"))
-              except ValueError:
-                  matrix_slot = 0
-              if email_domain_policy == "domain_ab_hotmail_outlook_v1" and matrix_slot > 0:
-                  profile_index = (matrix_slot - 1) % 35
-                  profile_cycle = (matrix_slot - 1) // 35
-                  if (profile_index + profile_cycle) % 2 == 0:
-                      email_domain_arm = "hotmail_treatment"
-                      email_domain_value = "hotmail.com"
-                  else:
-                      email_domain_arm = "outlook_control"
-                      email_domain_value = "outlook.com"
-              elif email_domain_policy == "domain_hotmail_v1":
-                  email_domain_arm = "hotmail_treatment"
-                  email_domain_value = "hotmail.com"
-              elif email_domain_policy == "domain_outlook_v1":
-                  email_domain_arm = "outlook_control"
-                  email_domain_value = "outlook.com"
-              elif email_domain_policy == "source_default":
-                  email_domain_arm = "source_default"
-                  email_domain_value = None
-
-          # Publish only aggregate-safe coordinator timings so queue regressions
-          # can be diagnosed from redacted verdicts without decrypting evidence.
-          # Restrict parsing to the canonical live-probe log because the same
-          # coordinator line is mirrored into wrapper logs.
-          coordinator_final_wait_ms = []
-          coordinator_final_gap_ms = []
-          coordinator_pattern = re.compile(
-              r"\[Coordinator\] stage=final seq=\d+ lease=\S+ "
-              r"wait_ms=(\d+) gap_ms=(\d+) reused=False"
-          )
-          for log_path in Path("Results/protocol_runtime").glob("*_live_probe.log"):
-              try:
-                  log_text = log_path.read_text(encoding="utf-8", errors="replace")
-              except Exception:
-                  continue
-              for match in coordinator_pattern.finditer(log_text):
-                  coordinator_final_wait_ms.append(int(match.group(1)))
-                  coordinator_final_gap_ms.append(int(match.group(2)))
-
-          result_values = []
-          for key in ("network_collector_results", "route_collector_results", "route_merged_results"):
-              value = row.get(key) or []
-              if isinstance(value, list):
-                  result_values.extend(str(item) for item in value)
-          accepted_result0 = any(item == "0" or item.endswith("|0") for item in result_values)
-          session_initial_accepted_result0 = accepted_result0 or fresh_session_first_fresh
-          post_success_rechallenge = bool(row.get("risk_verify_post_success_challenge"))
-          # Historical GA baseline classifiers predate the create_200 field,
-          # but emit create_account_200 only after strict response-body checks
-          # (HTTP 200 plus non-empty signinName and slt). Keep compatibility
-          # without weakening the newer classifier.
-          strict_success = row.get("verdict") == "create_account_200"
-          explicit_riskblock = bool(row.get("riskblock"))
-          # A successful CreateAccount response only establishes that the
-          # mailbox was created.  It does not establish that Microsoft will
-          # issue a usable OAuth/Graph token afterwards (service-abuse mode is
-          # the concrete counterexample).  Keep the protocol verdict intact
-          # for experiment comparability, but expose the post-create account
-          # lifecycle separately so dashboards and batch counts cannot equate
-          # "strict_success" with a usable mailbox.
-          graph_import_attempted = bool(ingest.get("attempted"))
-          graph_import_ok = ingest.get("success") is True
-          graph_import_attempts = int(ingest.get("retry") or 0)
-          ingest_mode = str(ingest.get("ingest_mode") or "")
-          if ingest_mode not in {"token", "staging_only"}:
-              ingest_mode = None
-          graph_import_error = str(ingest.get("error_code") or "")
-          allowed_ingest_errors = {
-              "input_invalid", "token_validation_failed",
-              "graph_probe_failed", "platform_config_error",
-          }
-          if graph_import_error not in allowed_ingest_errors:
-              graph_import_error = None
-          oauth_attempted = same_session_oauth.get("attempted") is True
-          oauth_success = same_session_oauth.get("success") is True
-          oauth_error_code = str(same_session_oauth.get("error_code") or "")
-          allowed_oauth_errors = {
-              "platform_config_error", "authorize_navigation", "oauth_callback_error",
-              "security_info_required", "login_required", "oauth_timeout",
-              "oauth_interaction_failed", "token_exchange_failed",
-              "oauth_internal_error", "token_result_invalid", "registration_failed",
-          }
-          if oauth_error_code not in allowed_oauth_errors:
-              oauth_error_code = None
-          binding_error_code = str(security_email_binding.get("error_code") or "")
-          allowed_binding_errors = {
-              "mail_api_key_missing", "mailbox_allocation_already_attempted",
-              "mail_api_transport_error", "mail_api_invalid_json", "mailbox_response_shape_unknown",
-              "mail_list_response_shape_unknown", "verification_email_timeout",
-              "proof_submit_control_unknown", "proof_form_shape_unknown", "interrupt_page_stalled",
-              "binding_total_timeout", "verification_not_accepted",
-              "unexpected_existing_proof_challenge", "oauth_internal_error",
-          }
-          if binding_error_code and not (
-              binding_error_code.startswith("mail_api_http_") or binding_error_code.startswith("oauth_source_drift")
-              or binding_error_code in allowed_binding_errors
-          ):
-              binding_error_code = None
-          if not strict_success:
-              account_lifecycle = "not_created"
-          elif graph_import_ok and ingest_mode == "token":
-              account_lifecycle = "graph_healthy"
-          elif graph_import_ok and ingest_mode == "staging_only":
-              account_lifecycle = "created_staged"
-          elif graph_import_attempted:
-              account_lifecycle = "created_graph_unhealthy"
-          else:
-              account_lifecycle = "created_graph_unverified"
-          multi_probe_slot = (
-              os.environ.get("VARIANT", "").startswith("paired_")
-              or os.environ.get("PER_IP_MAX_REGISTRATIONS", "1") != "1"
-          )
-
-          # Classification is intentionally based on decisive facts rather than
-          # only `verdict`: the private classifier currently gives LIVE_TIMEOUT
-          # precedence over a collector result|0 followed by a risk rechallenge.
-          if multi_probe_slot:
-              category = "technical_failure"
-              reason = "multi_probe_slot_requires_per_probe_verdicts"
-          elif strict_success:
-              category = "strict_success"
-              reason = "strict_create_account_body"
-          elif skipped:
-              category = "ip_skipped"
-              reason = "egress_denylist"
-          elif accepted_result0 and explicit_riskblock:
-              category = "technical_pass_ip_blocked"
-              reason = "collector_result0_then_explicit_riskblock"
-          elif explicit_riskblock:
-              category = "ip_riskblock"
-              reason = "explicit_riskblock"
-          elif accepted_result0 and fresh_absolute_timed_out:
-              category = "technical_failure"
-              reason = "collector_result0_then_fresh_absolute_timeout"
-          elif fresh_absolute_timed_out:
-              category = "technical_failure"
-              reason = "fresh_absolute_timeout_before_accepted_checkpoint"
-          elif accepted_result0 and fresh_idle_timed_out:
-              category = "technical_failure"
-              reason = "collector_result0_then_fresh_idle_timeout"
-          elif fresh_idle_timed_out:
-              category = "technical_failure"
-              reason = "fresh_idle_timeout_before_accepted_checkpoint"
-          elif accepted_result0 and fresh_policy_skipped:
-              category = "post_proof_rechallenge"
-              reason = "collector_result0_then_production_fast_fail"
-          elif accepted_result0 and post_success_rechallenge:
-              # A repeated challenge is not evidence of an IP block. Keep it
-              # visible as a post-proof technical outcome instead of turning a
-              # collector result|0 into an inferred IP diagnosis.
-              category = "post_proof_rechallenge"
-              reason = "collector_result0_then_rechallenge_without_riskblock"
-          else:
-              category = "technical_failure"
-              if not row:
-                  reason = "missing_classification"
-              elif accepted_result0 and timed_out:
-                  reason = "collector_result0_then_live_timeout_without_riskblock"
-              elif timed_out:
-                  reason = "probe_timeout_before_accepted_checkpoint"
-              else:
-                  reason = str(row.get("verdict") or "unclassified_failure")
-
-          # Keep this artifact public-safe: no IP, email, account fields, URLs,
-          # filenames, proxy names, raw errors, request bodies, or log excerpts.
-          safe = {
-              "schema": 1,
-              "attempt": os.environ.get("ATTEMPT", ""),
-              "variant": os.environ.get("VARIANT", ""),
-              "network_mode": os.environ.get("NETWORK_MODE", ""),
-              "runner": os.environ.get("RUNNER_LABEL", ""),
-              "orchestration_id": os.environ.get("ORCHESTRATION_ID", ""),
-              "fresh_session_restart_policy": fresh_session_restart_policy,
-              "fresh_session_restart_arm": fresh_session_restart_arm,
-              "fresh_session_restart_attempted": fresh_session_restart_attempted,
-              "fresh_session_initial_accepted_result0": session_initial_accepted_result0,
-              "fresh_session_first_fresh": fresh_session_first_fresh,
-              "fresh_session_recovered_strict": fresh_session_recovered_strict,
-              "fresh_session_second_fresh": fresh_session_second_fresh,
-              "fresh_session_second_riskblock": fresh_session_second_riskblock,
-              "pre_first_hold_warmup_policy": pre_first_hold_warmup_policy,
-              "pre_first_hold_warmup_arm": pre_first_hold_warmup_arm,
-              "pre_first_hold_warmup_ms": pre_first_hold_warmup_ms,
-              "pre_first_hold_warmup_applied": pre_first_hold_warmup_applied,
-              "signup_country_policy": signup_country_policy,
-              "signup_country_arm": signup_country_arm,
-              "signup_country_code": signup_country_code,
-              "signup_country_applied": signup_country_applied,
-              "signup_dob_policy": signup_dob_policy,
-              "signup_dob_arm": signup_dob_arm,
-              "signup_dob_mode": signup_dob_mode,
-              "signup_dob_applied": signup_dob_applied,
-              "email_domain_policy": email_domain_policy,
-              "email_domain_arm": email_domain_arm,
-              "email_domain": email_domain_value,
-              "email_domain_applied": email_domain_applied,
-              "coordinator_mode": os.environ.get("COORDINATOR_MODE", ""),
-              "max_parallel": int(os.environ.get("MAX_PARALLEL", "0")),
-              "runtime_mode": os.environ.get("RUNTIME_MODE", ""),
-              "probe_timeout_minutes": int(os.environ.get("PROBE_TIMEOUT_MINUTES", "0")),
-              "job_timeout_minutes": int(os.environ.get("JOB_TIMEOUT_MINUTES", "0")),
-              "probe_exit_code": os.environ.get("PROBE_EXIT_CODE", ""),
-              "category": category,
-              "reason": reason,
-              "strict_success": strict_success,
-              "account_lifecycle": account_lifecycle,
-              "oauth_attempted": oauth_attempted,
-              "oauth_success": oauth_success,
-              "oauth_error_code": oauth_error_code,
-              "security_email_binding_attempted": security_email_binding.get("attempted") is True,
-              "security_email_binding_verified": security_email_binding.get("binding_verified") is True,
-              "security_email_binding_error_code": binding_error_code,
-              "ingest_mode": ingest_mode,
-              "graph_import_attempted": graph_import_attempted,
-              "graph_import_ok": graph_import_ok,
-              "graph_import_attempts": graph_import_attempts,
-              "graph_import_error_code": graph_import_error,
-              "explicit_riskblock": explicit_riskblock,
-              "accepted_result0": accepted_result0,
-              "post_success_rechallenge": post_success_rechallenge,
-              "fresh_rechallenge_absolute_timed_out": fresh_absolute_timed_out,
-              "fresh_rechallenge_idle_timed_out": fresh_idle_timed_out,
-              "fresh_rechallenge_policy_skipped": fresh_policy_skipped,
-              "human_loaded": int(row.get("human_loaded") or 0),
-              "human_success": int(row.get("human_success") or 0),
-              "create_request": bool(row.get("create_request")),
-              "probe_timed_out": timed_out,
-              "coordinator_final_reservations": len(coordinator_final_wait_ms),
-              "coordinator_final_wait_ms": coordinator_final_wait_ms,
-              "coordinator_final_gap_ms": sorted(set(coordinator_final_gap_ms)),
-          }
-          out = Path("public-safe-verdict") / f"verdict-{safe['attempt']}.json"
-          out.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
-          print(json.dumps(safe, ensure_ascii=False))
-          PY
-
-      - name: Upload redacted verdict artifact
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ga-safe-verdict-${{ github.run_id }}-${{ matrix.attempt }}
-          path: public-safe-verdict/*.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Encrypt evidence before public artifact upload
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${RESULTS_ENCRYPTION_CERT_B64:-}"
-          mkdir -p public-artifacts .public-encryption
-          printf '%s' "$RESULTS_ENCRYPTION_CERT_B64" | base64 -d > .public-encryption/results_public_cert.pem
-          tar -C Results -czf .public-encryption/results.tar.gz .
-          openssl cms -encrypt -binary -aes-256-cbc \
-            -in .public-encryption/results.tar.gz \
-            -out public-artifacts/evidence-${{ github.run_id }}-${{ matrix.attempt }}.cms \
-            -outform DER \
-            .public-encryption/results_public_cert.pem
-          rm -rf .public-encryption
-
-      - name: Upload encrypted evidence artifact
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ga-encrypted-${{ inputs.variant }}-${{ github.run_id }}-${{ matrix.attempt }}
-          path: public-artifacts/*.cms
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Enforce no non-IP technical failure for exact release variants
-        if: ${{ always() && startsWith(inputs.variant, 'release_5s_success_') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          verdict=$(ls -t public-safe-verdict/verdict-*.json 2>/dev/null | head -n1 || true)
-          if [ -z "$verdict" ]; then
-            echo "technical failure: no public-safe verdict"
-            exit 1
-          fi
-          VERDICT_PATH="$verdict" python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          row = json.loads(Path(os.environ['VERDICT_PATH']).read_text(encoding='utf-8'))
-          category = str(row.get('category') or '')
-          acceptable = category in {
-              'strict_success',
-              'technical_pass_ip_blocked',
-              'ip_riskblock',
-              'ip_skipped',
-          }
-          print(json.dumps({
-              'category': category,
-              'reason': row.get('reason'),
-              'strict_success': row.get('strict_success'),
-              'accepted_result0': row.get('accepted_result0'),
-              'explicit_riskblock': row.get('explicit_riskblock'),
-              'acceptable_for_non_ip_goal': acceptable,
-          }, ensure_ascii=False))
-          raise SystemExit(0 if acceptable else 1)
-          PY
-
-  summarize:
-    if: ${{ always() }}
-    needs: own-ip-probe
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Download redacted slot verdicts
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ga-safe-verdict-${{ github.run_id }}-*
-          path: safe-verdicts
-          merge-multiple: true
-
-      - name: Evaluate non-IP path goal
-        shell: bash
-        env:
-          EXPECTED_SLOTS_JSON: ${{ inputs.node_slots_json }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          from collections import Counter
-          from pathlib import Path
-
-          try:
-              expected = len(json.loads(os.environ["EXPECTED_SLOTS_JSON"]))
-          except Exception:
-              expected = 0
-
-          rows = []
-          for path in sorted(Path("safe-verdicts").glob("verdict-*.json")):
-              try:
-                  rows.append(json.loads(path.read_text(encoding="utf-8")))
-              except Exception:
-                  pass
-
-          counts = Counter(str(row.get("category") or "missing") for row in rows)
-          missing = max(0, expected - len(rows))
-          post_proof_rechallenge = counts["post_proof_rechallenge"]
-          technical = (
-              counts["technical_failure"]
-              + post_proof_rechallenge
-              + counts["missing"]
-              + missing
-          )
-          strict = counts["strict_success"]
-          technical_pass_ip_blocked = counts["technical_pass_ip_blocked"]
-          checkpoint = strict + technical_pass_ip_blocked
-          ip_limited = counts["ip_riskblock"] + counts["ip_skipped"] + technical_pass_ip_blocked
-
-          if technical:
-              conclusion = "technical_failure"
-              goal_met = False
-          elif checkpoint:
-              # At least one slot proved the non-IP path through collector
-              # result|0 (or strict CreateAccount), and every other slot was
-              # either equally successful or stopped by an explicit IP gate.
-              conclusion = "strict_success" if strict else "technical_pass_ip_blocked"
-              goal_met = True
-          else:
-              conclusion = "inconclusive_ip_only"
-              goal_met = False
-
-          summary = {
-              "expected_slots": expected,
-              "received_verdicts": len(rows),
-              "strict_success": strict,
-              "ip_limited": ip_limited,
-              "technical_pass_ip_blocked": technical_pass_ip_blocked,
-              "post_proof_rechallenge": post_proof_rechallenge,
-              "technical_failure": technical,
-              "decisive_non_ip_checkpoint": checkpoint,
-              "goal_met": goal_met,
-              "conclusion": conclusion,
-          }
-          print(json.dumps(summary, ensure_ascii=False, indent=2))
-
-          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if step_summary:
-              with open(step_summary, "a", encoding="utf-8") as fh:
-                  fh.write("## GA non-IP path verdict\n\n")
-                  fh.write("```json\n")
-                  fh.write(json.dumps(summary, ensure_ascii=False, indent=2))
-                  fh.write("\n```\n")
-                  fh.write("\ntechnical_pass_ip_blocked requires an explicit riskBlock after collector result|0. A rechallenge or live timeout without explicit riskBlock is not classified as an IP problem.\n")
-
-          # Do not report a green workflow when every IP was blocked before a
-          # decisive checkpoint, or when any non-IP technical failure remains.
-          sys.exit(0 if goal_met else 1)
-          PY
+    - name: Lock one diagnostic run
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "$GITHUB_REF" = "refs/heads/exp/preverify-readtime-pair-fixed-20261006"
+
+        test "$GITHUB_RUN_ATTEMPT" = "1"
+
+        echo "One runner, two clean sessions, one preverify per arm, no CAPTCHA or account creation"
+
+        '
+    - name: Checkout fixed private source
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+        ref: c98f52a1fab80df3ab125ebb2b221521965f8b2b
+        ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+        persist-credentials: false
+    - name: Verify source and record egress
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "$(git rev-parse HEAD)" = "c98f52a1fab80df3ab125ebb2b221521965f8b2b"
+
+        mkdir -p Results/diagnostics
+
+        ip="$(curl -fsS --max-time 15 https://api.ipify.org)"
+
+        printf ''GA_PUBLIC_IP=%s
+
+        '' "$ip" >> "$GITHUB_ENV"
+
+        '
+    - name: Install pinned SunBrowser LocalFP runtime
+      shell: bash
+      env:
+        NETWORK_MODE_INPUT: ga_own_ip
+      run: "set -euxo pipefail\nif [ \"$NETWORK_MODE_INPUT\" != \"ga_own_ip\" ]; then\n  echo \"SunBrowser public-runner v1\
+        \ requires network_mode=ga_own_ip so region can fail closed to us\" >&2\n  exit 2\nfi\nSUNBROWSER_REGION_INPUT=us\n\
+        asset=\"SunBrowser-LocalFP-Linux-x64-20260718.tar.gz\"\nexpected=\"d1f881602e4e07c873154f3acd745b8772739c5f7469721c39eef0741b96235a\"\
+        \nurl=\"https://github.com/post7794/outlook-register-ga-public-runner-20260710/releases/download/sunbrowser-localfp-20260718/$asset\"\
+        \narchive_dir=\"$RUNNER_TEMP/sunbrowser-localfp-archive\"\ninstall_dir=\"$RUNNER_TEMP/sunbrowser-localfp\"\nmkdir\
+        \ -p \"$archive_dir\" \"$install_dir\" Results/diagnostics\ncurl -fsSL --retry 4 --retry-all-errors \"$url\" -o \"\
+        $archive_dir/$asset\"\necho \"$expected  $archive_dir/$asset\" | sha256sum -c -\ntar -xzf \"$archive_dir/$asset\"\
+        \ -C \"$install_dir\"\nroot=\"$install_dir/SunBrowser-LocalFP-Linux-x64-20260718\"\ntest -f \"$root/MANIFEST.sha256\"\
+        \nif ! (cd \"$root\" && sha256sum -c MANIFEST.sha256) > Results/diagnostics/sunbrowser-manifest.log 2>&1; then\n \
+        \ tail -80 Results/diagnostics/sunbrowser-manifest.log\n  exit 1\nfi\nchmod +x \"$root/tools/node\" \"$root/runtime/SunBrowser\"\
+        \ \"$root/runtime/chrome-sandbox\"\necho \"SUNBROWSER_LOCALFP_ROOT=$root\" >> \"$GITHUB_ENV\"\necho \"SUNBROWSER_REGION=$SUNBROWSER_REGION_INPUT\"\
+        \ >> \"$GITHUB_ENV\"\n\"$root/runtime/SunBrowser\" --protected-disable-safe-open --version\necho \"SunBrowser package\
+        \ archive and manifest: PASS\"\n"
+    - name: System dependencies
+      shell: bash
+      run: "set -euxo pipefail\nsudo apt-get update\nsudo apt-get install -y --no-install-recommends \\\n  xvfb xauth ca-certificates\
+        \ curl unzip fontconfig software-properties-common \\\n  fonts-liberation fonts-noto fonts-noto-cjk fonts-crosextra-carlito\
+        \ fonts-crosextra-caladea\nsudo apt-get install -y --no-install-recommends fonts-selawik || true\nsudo add-apt-repository\
+        \ -y multiverse || true\nsudo apt-get update || true\necho \"ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula\
+        \ select true\" | sudo debconf-set-selections || true\nsudo apt-get install -y --no-install-recommends ttf-mscorefonts-installer\
+        \ || true\nfc-cache -f\n"
+    - name: Python environment
+      shell: bash
+      run: "set -euxo pipefail\npython3 -m venv .venv\n. .venv/bin/activate\npython -m pip install --upgrade pip wheel setuptools\n\
+        pip install -r requirements.txt\nif [ \"same_session_oauth_security_email_fresh1\" != \"sunbrowser_thin_natural\"\
+        \ ] && [ \"same_session_oauth_security_email_fresh1\" != \"same_session_oauth_sunbrowser\" ] && [ \"same_session_oauth_security_email_fresh1\"\
+        \ != \"same_session_oauth_security_email\" ] && [ \"same_session_oauth_security_email_fresh1\" != \"same_session_oauth_security_email_fresh1\"\
+        \ ]; then\n  set +e\n  python -m cloakbrowser install\n  cb_code=$?\n  set -e\n  if [ \"$cb_code\" -ne 0 ]; then\n\
+        \    echo \"cloakbrowser install exited $cb_code; checking extracted binary\"\n    test -x \"$(ls -1d \"$HOME\"/.cloakbrowser/chromium-*/chrome\
+        \ 2>/dev/null | tail -1)\"\n  fi\nelse\n  echo \"SunBrowser variant selected; skipping CloakBrowser binary install\"\
+        \nfi\n"
+    - name: Install Windows-like font family aliases
+      shell: bash
+      run: "set -euxo pipefail\n. .venv/bin/activate\npython - <<'PY'\nfrom fontTools.ttLib import TTFont\nfrom pathlib import\
+        \ Path\n\nout = Path.home() / \".local/share/fonts/windows-ctf\"\nout.mkdir(parents=True, exist_ok=True)\n\ndef pick(*paths):\n\
+        \    return next((Path(p) for p in paths if Path(p).exists()), None)\n\ndefault_src = pick(\n    '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',\n\
+        \    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',\n    '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',\n\
+        \    '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',\n)\nselawik_src = pick(\n    '/usr/share/fonts/truetype/selawik/Selawik.ttf',\n\
+        \    '/usr/share/fonts/truetype/selawik/Selawik-Regular.ttf',\n) or default_src\ncalibri_src = pick(\n    '/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf',\n\
+        \    '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',\n) or default_src\nmsgothic_src = pick(\n    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',\n\
+        \    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',\n) or default_src\nif not default_src:\n    raise SystemExit('no\
+        \ base font found')\n\ndef set_name(font, name_id, value):\n    font['name'].setName(value, name_id, 3, 1, 0x409)\n\
+        \    font['name'].setName(value, name_id, 1, 0, 0)\n\nfamilies = [\n    ('Segoe UI', 'Regular', selawik_src),\n  \
+        \  ('Segoe UI Light', 'Regular', selawik_src),\n    ('Calibri', 'Regular', calibri_src),\n    ('Cambria', 'Regular',\
+        \ pick('/usr/share/fonts/truetype/crosextra/Caladea-Regular.ttf') or calibri_src),\n    ('Marlett', 'Regular', default_src),\n\
+        \    ('MS UI Gothic', 'Regular', msgothic_src),\n    ('Franklin Gothic', 'Regular', default_src),\n]\nfor family,\
+        \ subfamily, src in families:\n    try:\n        font = TTFont(str(src))\n    except Exception as exc:\n        if\
+        \ exc.__class__.__name__ == 'TTLibFileIsCollectionError':\n            font = TTFont(str(src), fontNumber=0)\n   \
+        \     else:\n            raise\n    full = f'{family} {subfamily}'\n    ps = ''.join(ch for ch in full if ch.isalnum())\n\
+        \    set_name(font, 1, family)\n    set_name(font, 2, subfamily)\n    set_name(font, 4, full)\n    set_name(font,\
+        \ 6, ps)\n    set_name(font, 16, family)\n    set_name(font, 17, subfamily)\n    font.save(str(out / f'{ps}.ttf'))\n\
+        PY\nfc-cache -f \"$HOME/.local/share/fonts\"\nfc-match 'Segoe UI' | head -1\nfc-match 'Calibri' | head -1\n"
+    - name: Normalize shell scripts
+      shell: bash
+      run: 'set -euxo pipefail
+
+        sed -i ''s/\r$//'' run_xvfb_*.sh
+
+        chmod +x run_xvfb_*.sh
+
+        '
+    - name: Record sanitized registration browser environment
+      shell: bash
+      env:
+        GA_SLOT: '1'
+        GA_VARIANT: same_session_oauth_security_email_fresh1
+        GA_NETWORK_MODE: ga_own_ip
+        GA_PUBLIC_IP: ${{ env.GA_PUBLIC_IP }}
+      run: "set -euo pipefail\n. .venv/bin/activate\npython3 - <<'PY'\nimport hashlib\nimport importlib.metadata\nimport json\n\
+        import os\nimport subprocess\nfrom pathlib import Path\n\nrelease_variant = os.environ.get('GA_VARIANT', '').startswith('release_5s_success_')\n\
+        source = Path(\n    'config.release-5s-success-ga.json'\n    if release_variant else\n    'config.ctf.runtime.protocol1s-adssafe-stab-5-xvfb-linux-1920-20260707.manual.json'\n\
+        )\ndata = json.loads(source.read_text(encoding='utf-8'))\ncontext = dict(data.get('context') or {})\ncloak = dict(data.get('cloakbrowser')\
+        \ or {})\nmanifest = {\n    # This is intentionally a launchable, non-secret subset of the\n    # exact config. It\
+        \ contains no profile directory, AdsPower ID,\n    # cookie, proxy credential, or account identifier.\n    'context':\
+        \ context,\n    'cloakbrowser': cloak,\n    'patchright': {'use_cloakbrowser': bool((data.get('patchright') or {}).get('use_cloakbrowser'))},\n\
+        \    'proxy': '',\n    'recovery_provenance': {\n        'schema': 1,\n        'source_sha': subprocess.check_output(['git',\
+        \ 'rev-parse', 'HEAD'], text=True).strip(),\n        'slot': os.environ.get('GA_SLOT', ''),\n        'variant': os.environ.get('GA_VARIANT',\
+        \ ''),\n        'network_mode': os.environ.get('GA_NETWORK_MODE', ''),\n        'xvfb_screen': '1920x1200x24' if release_variant\
+        \ else '2560x1440x24',\n        'cloakbrowser_version': importlib.metadata.version('cloakbrowser'),\n        'source_config_sha256':\
+        \ hashlib.sha256(source.read_bytes()).hexdigest(),\n        # Keep egress comparable without persisting an address\
+        \ in\n        # the artifact; a proxy itself must be supplied separately.\n        'egress_sha256': hashlib.sha256(os.environ.get('GA_PUBLIC_IP',\
+        \ '').encode()).hexdigest(),\n        'proxy_was_configured': bool(data.get('proxy')) or bool(os.environ.get('OUTLOOK_PROXY_URL')),\n\
+        \    },\n}\nout = Path('Results/diagnostics/registration_browser_env.json')\nout.parent.mkdir(parents=True, exist_ok=True)\n\
+        out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')\n# Safe confirmation only; do\
+        \ not print headers, UA, fingerprints, or\n# any persistent-profile data into the public runner log.\nprint(json.dumps({'recorded':\
+        \ True, 'schema': 1, 'proxy_was_configured': manifest['recovery_provenance']['proxy_was_configured']}))\nPY\n"
+    - name: Prepare bounded paired diagnostic
+      shell: bash
+      run: "set -euo pipefail\ncat > preverify_observer.py <<'DIAGNOSTIC_FILE'\n\"\"\"Paired snapshot/current-cookie timing\
+        \ experiment; stop after first preverify.\"\"\"\nfrom pathlib import Path\nfrom urllib.parse import urlsplit\nimport\
+        \ hashlib, json, os, re, time\nOUT = Path('Results/diagnostics/preverify-observer')\nASSETS = {\n    ('client.hsprotect.net','/PXzC5j78di/main.min.js'),\n\
+        \    ('iframe.hsprotect.net','/index.html'),\n}\n\ndef write(name, obj):\n    OUT.mkdir(parents=True, exist_ok=True)\n\
+        \    (OUT/name).write_text(json.dumps(obj,indent=2),encoding='utf-8')\n\ndef asset(response):\n    u=urlsplit(response.url)\n\
+        \    if (u.hostname,u.path) not in ASSETS: return\n    start=time.monotonic()\n    OUT.mkdir(parents=True, exist_ok=True)\n\
+        \    try:\n        b=response.body()\n        if len(b)>2000000: raise ValueError('asset exceeds capture cap')\n \
+        \       digest=hashlib.sha256(b).hexdigest()\n        OUT.mkdir(parents=True, exist_ok=True)\n        (OUT/(digest+('.js'\
+        \ if u.path.endswith('.js') else '.html'))).write_bytes(b)\n        headers={k.lower():v for k,v in response.headers.items()}\n\
+        \        row={'host':u.hostname,'path':u.path,'status':response.status,'bytes':len(b),'sha256':digest,\n         \
+        \    'headers':{k:headers.get(k) for k in ('etag','last-modified','content-length','content-encoding')},\n       \
+        \      'observer_elapsed_ms':round((time.monotonic()-start)*1000,3)}\n    except Exception as exc:\n        row={'host':u.hostname,'path':u.path,'capture_error_type':type(exc).__name__}\n\
+        \    with (OUT/'assets.safe.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(row)+'\\n')\n\ndef metadata_digest(v):\n\
+        \    return hashlib.sha256(json.dumps({k:v.get(k) for k in ('px3','pxde','pxvid')},sort_keys=True,separators=(',',':')).encode()).hexdigest()\n\
+        \ndef before(submitted, read_cookies):\n    if (OUT/'before.safe.json').exists(): os._exit(92)\n    arm=os.environ.get('READTIME_ARM')\n\
+        \    if arm not in ('snapshot','current'): os._exit(93)\n    started=time.monotonic()\n    current=read_cookies()\n\
+        \    original=dict(submitted)\n    complete=all(isinstance(current.get(k),str) and bool(current[k]) for k in ('px3','pxde','pxvid'))\n\
+        \    same_visitor=bool(original.get('pxvid')) and original.get('pxvid')==current.get('pxvid')\n    if not complete\
+        \ or not same_visitor:\n        write('aborted.safe.json',{'arm':arm,'complete_current_metadata':complete,'same_visitor':same_visitor,'request_sent':False})\n\
+        \        os._exit(94)\n    if arm=='current':\n        # Only use values produced by this clean session's existing\
+        \ cookie reader.\n        # Preserve the visitor ID, all signature fields, tokens and request order.\n        submitted['px3']=current['px3']\n\
+        \        submitted['pxde']=current['pxde']\n    changed=[k for k in ('px3','pxde','pxvid') if original.get(k)!=submitted.get(k)]\n\
+        \    assert set(changed)<=({'px3','pxde'} if arm=='current' else set())\n    fields={k:{'original_length':len(original.get(k,'')),\
+        \ 'submitted_length':len(submitted.get(k,'')),\n               'current_length':len(current.get(k,'')), 'original_equals_current':original.get(k)==current.get(k),\n\
+        \               'submitted_equals_current':submitted.get(k)==current.get(k)} for k in ('px3','pxde','pxvid')}\n  \
+        \  write('before.safe.json',{'arm':arm,'fields':fields,'changed_fields':changed,'same_visitor':same_visitor,\n   \
+        \       'observer_elapsed_ms':round((time.monotonic()-started)*1000,3),'sampled_at_epoch':time.time(),\n         \
+        \ 'request_content_changed':bool(changed),'submitted_metadata_sha256':metadata_digest(submitted)})\n\ndef safe_code(v):\n\
+        \    return v if isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}',v) else None\n\ndef stop(response, capture):\n\
+        \    try:\n        body=response.get('json') or {};err=body.get('error') or {}\n        write('after.safe.json',{'status':response.get('status'),'state':safe_code(body.get('state')),\n\
+        \              'error_code':safe_code(err.get('code')),'inner_code':safe_code((err.get('innerError') or {}).get('code')),\n\
+        \              'stopped_after_preverify':True,'sampled_at_epoch':time.time()})\n        raw=Path('Results/protocol_runtime/preverify-stop.json');raw.parent.mkdir(parents=True,exist_ok=True)\n\
+        \        raw.write_text(json.dumps({'collector_capture':capture,'saved_at':time.time()},default=str),encoding='utf-8')\n\
+        \    finally:\n        # End only this one-shot experiment process, before challenge handling.\n        os._exit(0)\n\
+        \nDIAGNOSTIC_FILE\ncat > instrument_preverify.py <<'DIAGNOSTIC_FILE'\n\"\"\"Apply exactly three observation/stop insertions\
+        \ to a verified controller copy.\"\"\"\nfrom pathlib import Path\nimport ast, hashlib, json\nROOT=Path(__file__).resolve().parent\n\
+        \ndef instrument(source):\n    anchors={\n      '                url = response.url\\n': '                import preverify_observer\\\
+        n                preverify_observer.asset(response)\\n',\n      '                if preverify_transport in {\"api\"\
+        , \"api_request\", \"context\", \"request\"}:\\n': '                import preverify_observer\\n                preverify_observer.before(pre_verify_body[\"\
+        riskProviderMetadata\"][0], read_hsprotect_solution_cookies)\\n',\n      '                pre_json = pre_verify.get(\"\
+        json\") if isinstance(pre_verify, dict) else None\\n': '                preverify_observer.stop(pre_verify, getattr(page,\
+        \ \"_pxprobe_collector_capture\", {}))\\n',\n    }\n    changed=source\n    for old,addition in anchors.items():\n\
+        \        assert changed.count(old)==1, 'Source anchor is not unique'\n        changed=changed.replace(old, addition+old\
+        \ if 'if preverify_transport' in old else old+addition)\n    ast.parse(changed)\n    return changed\n\ndef main():\n\
+        \    source_path=Path('controllers/base_controller.py')\n    source=source_path.read_text(encoding='utf-8')\n    manifest=json.loads(Path('experiment-source.safe.json').read_text(encoding='utf-8-sig'))\n\
+        \    assert hashlib.sha256(source.encode()).hexdigest()==manifest['controller_normalized_sha256'], 'Controller mismatch'\n\
+        \    target=instrument(source)\n    out=Path('Results/diagnostics/preverify-observer');out.mkdir(parents=True,exist_ok=True)\n\
+        \    (out/'patch.safe.json').write_text(json.dumps({'base_sha256':manifest['controller_normalized_sha256'],'instrumented_sha256':hashlib.sha256(target.encode()).hexdigest(),'insertion_sites':3,'request_mutation':'current\
+        \ arm: px3/pxde reread only'}),encoding='utf-8')\n    source_path.write_text(target,encoding='utf-8')\n    print('Verified\
+        \ controller: three observation/stop insertions applied')\n\nif __name__=='__main__':main()\n\nDIAGNOSTIC_FILE\ncat\
+        \ > validate_run.py <<'DIAGNOSTIC_FILE'\n\"\"\"Validate the one-shot boundary and publish only an allowlisted summary.\"\
+        \"\"\nfrom pathlib import Path\nfrom urllib.parse import urlsplit\nfrom collections import Counter\nimport json, hashlib\n\
+        \ndef main():\n    root=Path('Results/diagnostics/preverify-observer')\n    before=json.loads((root/'before.safe.json').read_text())\n\
+        \    after=json.loads((root/'after.safe.json').read_text())\n    events=[];network=[]\n    for pattern,target in [('Results/protocol_takeover/*.jsonl',events),('Results/network/*.jsonl',network)]:\n\
+        \        for p in Path().glob(pattern):\n            target.extend(json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines()\
+        \ if x)\n    pre=[e for e in events if e.get('event')=='risk_verify_pre_request']\n    post=[e for e in events if\
+        \ e.get('event')=='risk_verify_post_request']\n    requests=[e for e in network if e.get('event')=='request']\n  \
+        \  creates=[e for e in requests if urlsplit(e.get('url','')).path.lower().endswith('/createaccount')]\n    captcha=[e\
+        \ for e in requests if urlsplit(e.get('url','')).path.endswith('/captcha.js')]\n    verify=[e for e in requests if\
+        \ e.get('method')=='POST' and urlsplit(e.get('url','')).path.endswith('/risk/verify')]\n    assert len(pre)==1 and\
+        \ len(verify)==1 and not post and not creates and not captcha\n    assert after['stopped_after_preverify'] is True\n\
+        \    sent=json.loads(pre[0]['body'])\n    actual=json.loads(verify[0]['post_data'])\n    assert sent==actual, 'Protocol\
+        \ and actual network body differ'\n    provider=next(x for x in sent['riskProviderMetadata'] if x['riskProvider']=='Human')\n\
+        \    digest=hashlib.sha256(json.dumps({k:provider.get(k) for k in ('px3','pxde','pxvid')},sort_keys=True,separators=(',',':')).encode()).hexdigest()\n\
+        \    assert digest==before['submitted_metadata_sha256'], 'Observed and transmitted metadata differ'\n    assert before['arm']\
+        \ in ('snapshot','current') and before['same_visitor'] is True\n    assert set(before['changed_fields']) <= ({'px3','pxde'}\
+        \ if before['arm']=='current' else set())\n    if before['arm']=='current': assert all(v['submitted_equals_current']\
+        \ for v in before['fields'].values())\n    assets=[json.loads(x) for x in (root/'assets.safe.jsonl').read_text().splitlines()\
+        \ if x]\n    assert any(r.get('path','').endswith('main.min.js') and r.get('sha256') and r.get('bytes',0)>100000 for\
+        \ r in assets)\n    builds=[]\n    for n in network:\n        if n.get('event')=='response' and '/risk/' in n.get('url',''):\n\
+        \            headers={k.lower():v for k,v in (n.get('headers') or {}).items()}\n            v=headers.get('x-ms-ests-server')\n\
+        \            if v: builds.append({'path':urlsplit(n['url']).path.rsplit('/',1)[-1],'status':n.get('status'),'server':v})\n\
+        \    summary={'boundary_verified':True,'preverify_requests':1,'postverify_requests':0,'create_requests':0,'captcha_js_requests':0,\n\
+        \             'before':before,'after':after,'assets':assets,'service_builds':builds,'success_rate_measured':False,'transmitted_metadata_verified':True}\n\
+        \    out=Path('public-preverify-summary');out.mkdir(exist_ok=True)\n    (out/'summary.safe.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')\n\
+        \    print(json.dumps({'boundary_verified':True,'preverify_status':after.get('status'),'create_requests':0,'captcha_js_requests':0}))\n\
+        \nif __name__=='__main__':main()\n\nDIAGNOSTIC_FILE\ncat > experiment-source.safe.json <<'DIAGNOSTIC_FILE'\n{\n  \"\
+        source_sha\": \"c98f52a1fab80df3ab125ebb2b221521965f8b2b\",\n  \"local_equivalent_tree\": \"569dea0de0059d5fff4e50b25a5e6aef51460678\"\
+        ,\n  \"controller_normalized_sha256\": \"c8b52c7c99b4e8679b7cf3fc9d19d42a67df149d5efed2f1241c9e8a6f8ac3b7\"\n}\nDIAGNOSTIC_FILE\n\
+        cat > run_pair.py <<'DIAGNOSTIC_FILE'\n\"\"\"One randomized pair on one GA runner, with separately extracted clean\
+        \ profiles.\"\"\"\nfrom pathlib import Path, PurePosixPath\nimport hashlib, ipaddress, json, os, re, secrets, shutil,\
+        \ subprocess, tarfile, time\nROOT=Path.cwd().resolve()\nARMS=('snapshot','current')\n\ndef save(path,obj):\n    path.parent.mkdir(parents=True,exist_ok=True)\n\
+        \    path.write_text(json.dumps(obj,indent=2),encoding='utf-8')\n\ndef safe_extract(archive,dest):\n    dest=dest.resolve()\n\
+        \    assert not dest.exists(), 'Arm directory already exists'\n    with tarfile.open(archive,'r:') as t:\n       \
+        \ members=t.getmembers()\n        for m in members:\n            p=PurePosixPath(m.name)\n            if p.is_absolute()\
+        \ or '..' in p.parts or not (m.isdir() or m.isfile()):\n                raise ValueError('Unsafe archive member')\n\
+        \            if not (dest/Path(*p.parts)).resolve().is_relative_to(dest):raise ValueError('Archive outside arm')\n\
+        \        dest.mkdir(parents=True)\n        for m in members:\n            target=dest/Path(*PurePosixPath(m.name).parts)\n\
+        \            if m.isdir():target.mkdir(parents=True,exist_ok=True);continue\n            target.parent.mkdir(parents=True,exist_ok=True)\n\
+        \            with target.open('xb') as out:shutil.copyfileobj(t.extractfile(m),out)\n            target.chmod(m.mode\
+        \ & 0o777)\n\ndef prepare_shells(work,baseline):\n    rows=[]\n    for file in work.glob('run_xvfb_*.sh'):\n     \
+        \   normalized=file.read_bytes().replace(b'\\r\\n',b'\\n')\n        reference=baseline/file.name\n        assert normalized==reference.read_bytes(),\
+        \ 'Prepared shell differs from baseline'\n        file.write_bytes(normalized)\n        file.chmod(0o755)\n      \
+        \  rows.append({'file':file.name,'sha256':hashlib.sha256(normalized).hexdigest(),'normalized_and_executable':True})\n\
+        \    assert any(x['file']=='run_xvfb_sunbrowser_natural_1920.sh' for x in rows)\n    return rows\n\ndef egress():\n\
+        \    r=subprocess.run(['curl','-fsS','--max-time','15','https://api.ipify.org'],capture_output=True,text=True,timeout=20,check=True)\n\
+        \    ip=str(ipaddress.ip_address(r.stdout.strip()))\n    return hashlib.sha256(ip.encode()).hexdigest()\n\ndef main():\n\
+        \    assert os.environ.get('GITHUB_RUN_ATTEMPT')=='1'\n    runid=os.environ['GITHUB_RUN_ID'];assert re.fullmatch(r'\\\
+        d+',runid)\n    parent=ROOT/'Results/diagnostics/readtime-pair'\n    assert not parent.exists(), 'Pair journal exists;\
+        \ never repeat'\n    parent.mkdir(parents=True)\n    order=list(ARMS)\n    if secrets.randbits(1):order.reverse()\n\
+        \    save(parent/'order.safe.json',{'order':order,'selection':'one random bit before first session','max_sessions':2,'max_preverify_requests':2})\n\
+        \    manifest=json.loads((ROOT/'experiment-source.safe.json').read_text())\n    assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==manifest['source_sha']\n\
+        \    archive=ROOT/'.readtime-source.tar'\n    assert not archive.exists()\n    subprocess.run(['git','archive','--format=tar','--output',str(archive),'HEAD'],check=True)\n\
+        \    prior_ip=egress();runs=[];session_identities=[]\n    for index,arm in enumerate(order):\n        current_ip=egress();assert\
+        \ current_ip==prior_ip, 'Egress probe changed; stop pair'\n        work=ROOT/'experiment-arms'/arm\n        safe_extract(archive,work)\n\
+        \        assert not (work/'profiles').exists() and not (work/'Results').exists()\n        shell_manifest=prepare_shells(work,ROOT)\n\
+        \        subprocess.run(['bash','-n',str(work/'run_xvfb_sunbrowser_natural_1920.sh')],check=True)\n        (work/'.venv').symlink_to(ROOT/'.venv',target_is_directory=True)\n\
+        \        for name in ('preverify_observer.py','instrument_preverify.py','validate_run.py','experiment-source.safe.json'):\n\
+        \            shutil.copyfile(ROOT/name,work/name)\n        env=dict(os.environ,READTIME_ARM=arm,GA_SLOT=str(index+1),OUTLOOK_SAME_SESSION_OAUTH='0',SECURITY_EMAIL_BINDING='0')\n\
+        \        subprocess.run([str(ROOT/'.venv/bin/python'),'instrument_preverify.py'],cwd=work,env=env,check=True)\n  \
+        \      log=work/'Results/diagnostics/private-console.log';log.parent.mkdir(parents=True,exist_ok=True)\n        save(work/'Results/diagnostics/shell-preparation.safe.json',shell_manifest)\n\
+        \        record={'arm':arm,'index':index,'clean_profile_root_before':True,'egress_probe_sha256':current_ip,'started_at_epoch':time.time()}\n\
+        \        save(parent/(arm+'.safe.json'),record)\n        try:\n            with log.open('wb') as out:\n         \
+        \       result=subprocess.run(['timeout','--foreground','180s','./run_xvfb_sunbrowser_natural_1920.sh'],cwd=work,env=env,stdout=out,stderr=subprocess.STDOUT,timeout=205)\n\
+        \            record.update(exit_code=result.returncode,finished_at_epoch=time.time())\n            text=log.read_text(encoding='utf-8',errors='replace')\n\
+        \            record['browser_cleanup_confirmed']=bool(re.search(r'\\[SunBrowser\\] cleanup pid=\\d+ stopped=yes',text))\n\
+        \            assert record['browser_cleanup_confirmed'], 'Browser cleanup not confirmed; stop pair'\n            subprocess.run([str(ROOT/'.venv/bin/python'),'validate_run.py'],cwd=work,env=env,check=True)\n\
+        \            summary=json.loads((work/'public-preverify-summary/summary.safe.json').read_text())\n            assert\
+        \ summary['before']['arm']==arm\n            # Verify distinct actual visitors/tokens without publishing raw values.\n\
+        \            events=[]\n            for f in (work/'Results/protocol_takeover').glob('*.jsonl'):\n               \
+        \ events.extend(json.loads(x) for x in f.read_text().splitlines() if x)\n            body=json.loads(next(e['body']\
+        \ for e in events if e.get('event')=='risk_verify_pre_request'))\n            visitor=next(p['pxvid'] for p in body['riskProviderMetadata']\
+        \ if p['riskProvider']=='Human')\n            identity=(hashlib.sha256(visitor.encode()).hexdigest(),hashlib.sha256(body['continuationToken'].encode()).hexdigest())\n\
+        \            assert all(identity[0]!=v[0] and identity[1]!=v[1] for v in session_identities), 'Session identities\
+        \ reused'\n            session_identities.append(identity)\n            record['boundary_verified']=True;record['preverify_status']=summary['after']['status']\n\
+        \            save(ROOT/'public-preverify-summary'/(arm+'.safe.json'),summary)\n            runs.append(record)\n \
+        \       finally:\n            save(parent/(arm+'.safe.json'),record)\n            if (work/'Results').exists():shutil.copytree(work/'Results',ROOT/'Results/pair'/arm)\n\
+        \    final_ip=egress()\n    pair={'run_id':runid,'order':order,'arms':runs,'distinct_visitors_and_tokens':True,'egress_probe_stable':final_ip==prior_ip,\n\
+        \          'same_runner':True,'max_preverify_requests':2,'actual_preverify_requests':2,'create_requests':0,'captcha_js_requests':0,\n\
+        \          'conclusion_scope':'one pair, not a success-rate estimate or unique causal attribution'}\n    save(parent/'pair.safe.json',pair);save(ROOT/'public-preverify-summary/pair.safe.json',pair)\n\
+        \    assert pair['egress_probe_stable'], 'Egress probe changed at end'\n    print(json.dumps({'pair_completed':True,'order':order,'statuses':[r['preverify_status']\
+        \ for r in runs],'create_requests':0}))\n\nif __name__=='__main__':main()\n\nDIAGNOSTIC_FILE\npython3 -m py_compile\
+        \ preverify_observer.py instrument_preverify.py validate_run.py run_pair.py\n"
+    - name: Run one randomized clean-session pair
+      id: observe
+      shell: bash
+      timeout-minutes: 9
+      env:
+        OUTLOOK_SAME_SESSION_OAUTH: '0'
+        SECURITY_EMAIL_BINDING: '0'
+      run: 'set -euo pipefail
+
+        mkdir -p Results/diagnostics
+
+        . .venv/bin/activate
+
+        python -m pip freeze > Results/diagnostics/python-dependencies.txt
+
+        dpkg-query -W > Results/diagnostics/system-packages.txt
+
+        python run_pair.py
+
+        '
+    - name: Encrypt evidence before public artifact upload
+      if: ${{ always() }}
+      shell: bash
+      run: "set -euo pipefail\ntest -n \"${RESULTS_ENCRYPTION_CERT_B64:-}\"\nmkdir -p public-artifacts .public-encryption\n\
+        printf '%s' \"$RESULTS_ENCRYPTION_CERT_B64\" | base64 -d > .public-encryption/results_public_cert.pem\ntar -C Results\
+        \ -czf .public-encryption/results.tar.gz .\nopenssl cms -encrypt -binary -aes-256-cbc \\\n  -in .public-encryption/results.tar.gz\
+        \ \\\n  -out public-artifacts/evidence-${{ github.run_id }}-1.cms \\\n  -outform DER \\\n  .public-encryption/results_public_cert.pem\n\
+        rm -rf .public-encryption\n"
+    - name: Upload encrypted diagnostic evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: readtime-pair-encrypted-${{ github.run_id }}
+        path: public-artifacts/*.cms
+        if-no-files-found: error
+        retention-days: 3
+    - name: Upload allowlisted summary
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: readtime-pair-summary-${{ github.run_id }}
+        path: public-preverify-summary/*.safe.json
+        if-no-files-found: error
+        retention-days: 14
