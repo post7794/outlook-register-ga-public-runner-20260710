@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     env:
       PYTHONIOENCODING: utf-8
+      PROBE_FIXED_PASSWORD: ${{ secrets.PROBE_FIXED_PASSWORD }}
     steps:
       - name: Checkout private source
         uses: actions/checkout@v4
