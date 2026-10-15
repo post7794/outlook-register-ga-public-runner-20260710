@@ -57,8 +57,8 @@ jobs:
           $dir = Split-Path $exeItem.FullName
           Write-Host "FLASH_DIR_ACTUAL=$dir"
           "FLASH_DIR_ACTUAL=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          $exe = Get-FileHash -Algorithm SHA256 (Join-Path $dir.FullName "CefFlashBrowser.exe")
-          $cef = Get-FileHash -Algorithm SHA256 (Join-Path $dir.FullName "Assets\CefSharp\libcef.dll")
+          $exe = Get-FileHash -Algorithm SHA256 (Join-Path $dir "CefFlashBrowser.exe")
+          $cef = Get-FileHash -Algorithm SHA256 (Join-Path $dir "Assets\CefSharp\libcef.dll")
           if ($exe.Hash.ToLower() -ne $env:FLASH_EXE_SHA256) { throw "exe hash mismatch: $($exe.Hash)" }
           if ($cef.Hash.ToLower() -ne $env:LIBCEF_SHA256) { throw "libcef hash mismatch: $($cef.Hash)" }
           Write-Host "hashes verified"
