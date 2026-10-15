@@ -26,6 +26,11 @@ jobs:
     env:
       PYTHONIOENCODING: utf-8
       PROBE_FIXED_PASSWORD: ${{ secrets.PROBE_FIXED_PASSWORD }}
+      SECURITY_EMAIL_BINDING: "1"
+      SECURITY_MAIL_API_KEY: ${{ secrets.SECURITY_MAIL_API_KEY }}
+      OUTLOOK_SAME_SESSION_OAUTH: "1"
+      OUTLOOK_EMAIL_BASE_URL: ${{ vars.OUTLOOK_EMAIL_BASE_URL }}
+      OUTLOOK_EMAIL_API_KEY: ${{ secrets.OUTLOOK_EMAIL_API_KEY }}
     steps:
       - name: Checkout private source
         uses: actions/checkout@v4
@@ -44,7 +49,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          python -m pip install patchright
+          python -m pip install patchright cryptography requests
 
       - name: Run probe attempt ${{ matrix.num }}
         id: probe
@@ -69,7 +74,7 @@ jobs:
         run: |
           "## Edge batch attempt ${{ matrix.num }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           Get-Content batch-result.txt -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          Get-Content edge-attempt.log -ErrorAction SilentlyContinue | Select-String -Pattern "GA_RESULT|verify=|challenge|holding|attempt" | Select-Object -Last 15 | ForEach-Object { $_.Line } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content edge-attempt.log -ErrorAction SilentlyContinue | Select-String -Pattern "GA_RESULT|verify=|ingest=|binding_diag|oauth_diag|challenge|attempt" | Select-Object -Last 25 | ForEach-Object { $_.Line } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Upload result
         if: always()
