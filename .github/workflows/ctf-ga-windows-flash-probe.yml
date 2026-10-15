@@ -49,13 +49,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path D:\a\flash | Out-Null
+          New-Item -ItemType Directory -Force -Path D:\a\flash\fb | Out-Null
           Invoke-WebRequest -Uri "$env:FLASH_URL" -OutFile D:\a\flash\flash.zip
-          Expand-Archive -Path D:\a\flash\flash.zip -DestinationPath D:\a\flash -Force
-          $dir = Get-ChildItem -Path D:\a\flash -Directory | Where-Object Name -like "FlashBrowser*" | Select-Object -First 1
-          if (-not $dir) { throw "extracted dir not found" }
-          Write-Host "FLASH_DIR_ACTUAL=$($dir.FullName)"
-          "FLASH_DIR_ACTUAL=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Expand-Archive -Path D:\a\flash\flash.zip -DestinationPath D:\a\flash\fb -Force
+          $exeItem = Get-ChildItem -Path D:\a\flash\fb -Recurse -Filter CefFlashBrowser.exe | Select-Object -First 1
+          if (-not $exeItem) { throw "CefFlashBrowser.exe not found after extract" }
+          $dir = Split-Path $exeItem.FullName
+          Write-Host "FLASH_DIR_ACTUAL=$dir"
+          "FLASH_DIR_ACTUAL=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
           $exe = Get-FileHash -Algorithm SHA256 (Join-Path $dir.FullName "CefFlashBrowser.exe")
           $cef = Get-FileHash -Algorithm SHA256 (Join-Path $dir.FullName "Assets\CefSharp\libcef.dll")
           if ($exe.Hash.ToLower() -ne $env:FLASH_EXE_SHA256) { throw "exe hash mismatch: $($exe.Hash)" }
@@ -66,6 +67,7 @@ jobs:
         shell: pwsh
         run: |
           $dir = "$env:FLASH_DIR_ACTUAL"
+          if (-not (Test-Path (Join-Path $dir "CefFlashBrowser.exe"))) { throw "flash dir invalid: $dir" }
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\Documents\CefFlashBrowser" | Out-Null
           Set-Content -Path "$env:USERPROFILE\Documents\CefFlashBrowser\settings.json" -Value '{"FirstStart": false, "Language": "zh-CN"}' -Encoding UTF8
           Get-Content "$env:USERPROFILE\Documents\CefFlashBrowser\settings.json"
