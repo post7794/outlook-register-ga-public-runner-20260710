@@ -1,0 +1,81 @@
+name: CTF Windows real-Edge batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_ref:
+        description: "Private source ref (full 40-char SHA or branch)"
+        required: true
+        default: "main"
+      matrix_json:
+        description: "Matrix include rows, e.g. {\"num\":[1,2,3]}"
+        required: true
+        default: "{\"num\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]}"
+      timeout_minutes:
+        description: "Job timeout minutes"
+        required: true
+        default: "25"
+
+jobs:
+  edge-batch:
+    runs-on: windows-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix_json) }}
+    env:
+      PYTHONIOENCODING: utf-8
+      PROBE_FIXED_PASSWORD: ${{ secrets.PROBE_FIXED_PASSWORD }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.private_ref }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install patchright
+
+      - name: Run probe attempt ${{ matrix.num }}
+        id: probe
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          python edge_ga\edge_fill_ga.py 2>&1 | Tee-Object -FilePath "edge-attempt.log"
+          Write-Host "exit=$LASTEXITCODE"
+          "probe_exit=$LASTEXITCODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $ga = Select-String -Path "edge-attempt.log" -Pattern "GA_RESULT=" | Select-Object -Last 1
+          $em = Select-String -Path "edge-attempt.log" -Pattern "email=" | Select-Object -Last 1
+          $vf = Select-String -Path "edge-attempt.log" -Pattern "verify=" | Select-Object -Last 1
+          "ga_result=$($ga.Line)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "email_line=$($em.Line)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "verify_line=$($vf.Line)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "${{ matrix.num }}|$($em.Line)|$($vf.Line)|$($ga.Line)" | Out-File -FilePath batch-result.txt -Append
+
+      - name: Summarize
+        if: always()
+        shell: pwsh
+        run: |
+          "## Edge batch attempt ${{ matrix.num }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content batch-result.txt -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content edge-attempt.log -ErrorAction SilentlyContinue | Select-String -Pattern "GA_RESULT|verify=|challenge|holding|attempt" | Select-Object -Last 15 | ForEach-Object { $_.Line } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-batch-${{ matrix.num }}-${{ github.run_id }}
+          path: |
+            batch-result.txt
+            edge-attempt.log
