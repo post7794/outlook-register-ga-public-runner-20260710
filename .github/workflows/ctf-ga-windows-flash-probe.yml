@@ -6,7 +6,7 @@ on:
       private_ref:
         description: "Private source ref (commit or branch)"
         required: true
-        default: "700e9f2"
+        default: "700e9f28d973d1b9fd3e4e9a254b216e586843a2"
       timeout_minutes:
         description: "Job timeout minutes"
         required: true
