@@ -341,7 +341,7 @@ jobs:
       NATURAL_SAME_CHALLENGE_SETTLE_MODE: ${{ inputs.natural_same_challenge_settle_mode || 'early0' }}
       HSPROTECT_MAIN_ASSET_SHA256: ${{ inputs.hsprotect_main_asset_sha256 || 'd666a320f33968a79271b427ddce506bd1aa0c815834dce91ae33d4ec3291f59' }}
       HSPROTECT_MAIN_ASSET_FAMILY_SHA256: "e2fc41e4b0a8a62a0c67de3b4334db80ae5aa9808bbbe3ddc7cccdd320b76bf3"
-      RECOVERY_SOURCE_REF: "1ad666fa364c096a0c74c32151d7e634102915c1"
+      RECOVERY_SOURCE_REF: "b2d0cfb292fe1c1c22cf1024f52cc692b2d0e176"
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -674,7 +674,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: "1ad666fa364c096a0c74c32151d7e634102915c1"
+          ref: "b2d0cfb292fe1c1c22cf1024f52cc692b2d0e176"
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -1435,11 +1435,11 @@ jobs:
               "$protocol_source")
             test "$actual_protocol_sha256" = '3143e2f5c4f62964269a92cc5a9ecb07b0779444b33c335a2ecaf5b4783f93a4'
           elif [ "$REGISTRATION_NATURAL_OVERLAY" = "true" ]; then
-            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_875b057.py"
+            protocol_source="$GITHUB_WORKSPACE/runtime_overlays/protocol_runtime_probe_20261017.py"
             actual_protocol_sha256=$("$GITHUB_WORKSPACE/$VENV_PYTHON" -c \
               'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
               "$protocol_source")
-            test "$actual_protocol_sha256" = 'a6cd0ef7634392c5dd944dcc3ffaeb8ab5156a1c25fb5ac9168e09339743f141'
+            test "$actual_protocol_sha256" = '34324ec4c8ce7432c3ef9ba86683ebc839f79159fbb8d812124e6e12b226c87c'
           fi
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
           cp "$GITHUB_WORKSPACE/tools/security_email_binding.py" "$runtime/tools/security_email_binding.py"
