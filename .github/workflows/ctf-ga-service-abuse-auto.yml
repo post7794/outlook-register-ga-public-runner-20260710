@@ -52,6 +52,14 @@ on:
         description: "Use the byte-exact protocol runtime from the two verified local TierRestore recoveries"
         required: true
         default: "false"
+      browser_engine:
+        description: "Recovery browser: Cloak patched Chromium or the real Microsoft Edge recipe validated by the edge registration line"
+        required: true
+        default: "cloak"
+        type: choice
+        options:
+          - cloak
+          - edge
       registration_natural_overlay:
         description: "Use the hash-pinned 875b057-derived thin-natural registration protocol"
         required: true
@@ -304,6 +312,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       SERVICE_ABUSE_EXPERIMENT_KEY: ${{ secrets.SERVICE_ABUSE_EXPERIMENT_KEY }}
+      SECURITY_MAIL_API_KEY: ${{ secrets.SECURITY_MAIL_API_KEY }}
       RECOVERY_SLOT: ${{ matrix.slot }}
       RECOVERY_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes || '30' }}
       NATURAL_STABLE_MINUS1_RETRY_AB: "true"
@@ -316,6 +325,7 @@ jobs:
       PROXY_POOL_PROFILE: ${{ inputs.proxy_pool_profile || 'unseen' }}
       PROXY_POOL_SLOT_OFFSET: ${{ inputs.proxy_pool_slot_offset || '0' }}
       RECOVERY_HUMAN_MODE: ${{ inputs.recovery_human_mode || 'natural10' }}
+      BROWSER_ENGINE: ${{ inputs.browser_engine || 'cloak' }}
       HISTORICAL_PROTOCOL_OVERLAY: ${{ inputs.historical_protocol_overlay || 'false' }}
       REGISTRATION_NATURAL_OVERLAY: ${{ inputs.registration_natural_overlay || 'true' }}
       HUMAN_RUNTIME_REF: ${{ (inputs.recovery_human_mode || 'natural10') == 'exact5s' && '00b68437e041cbdcee2be209a18d7a5592f4c2dd' || '875b0571d5b9c88b89a5bbc64f30488ee9565962' }}
@@ -335,7 +345,7 @@ jobs:
       NATURAL_SAME_CHALLENGE_SETTLE_MODE: ${{ inputs.natural_same_challenge_settle_mode || 'early0' }}
       HSPROTECT_MAIN_ASSET_SHA256: ${{ inputs.hsprotect_main_asset_sha256 || '77aed42430ae5f8c15294950fc69c37fa1ca52cec4c32d50e890e8b80830b502' }}
       HSPROTECT_MAIN_ASSET_FAMILY_SHA256: "b8f8b46fe3c73ba6b1756d68b5233f4e76a8aff54e53455c4dd8f113f2935fca"
-      RECOVERY_SOURCE_REF: "1913a13bbaff040a11516e2e9c2a084d277a24dd"
+      RECOVERY_SOURCE_REF: "d348a15a83854ba3ea3206393a20a55bdc05c054"
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -668,7 +678,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: "1913a13bbaff040a11516e2e9c2a084d277a24dd"
+          ref: "d348a15a83854ba3ea3206393a20a55bdc05c054"
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -900,12 +910,16 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip wheel setuptools
           pip install -r requirements.txt
-          set +e
-          python -m cloakbrowser install
-          cb_code=$?
-          set -e
-          if [ "$cb_code" -ne 0 ]; then
-            test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+          if [ "${BROWSER_ENGINE:-cloak}" = "edge" ]; then
+            echo "edge engine selected: skipping cloakbrowser install"
+          else
+            set +e
+            python -m cloakbrowser install
+            cb_code=$?
+            set -e
+            if [ "$cb_code" -ne 0 ]; then
+              test -x "$(ls -1d "$HOME"/.cloakbrowser/chromium-*/chrome 2>/dev/null | tail -1)"
+            fi
           fi
 
       - name: Python environment on Windows
@@ -925,6 +939,23 @@ jobs:
             if (-not $found) { throw "cloakbrowser install failed with exit_code=$code" }
           }
           & .\.venv\Scripts\python.exe -m cloakbrowser info
+
+      - name: Install Microsoft Edge for edge recovery
+        if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux' && env.BROWSER_ENGINE == 'edge'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x /usr/bin/microsoft-edge ] || [ -x /usr/bin/microsoft-edge-stable ]; then
+            echo "microsoft-edge already present"
+            exit 0
+          fi
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-edge.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main" \
+            | sudo tee /etc/apt/sources.list.d/microsoft-edge.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends microsoft-edge-stable
+          /usr/bin/microsoft-edge --version || /usr/bin/microsoft-edge-stable --version
 
       - name: Install registration-compatible Windows font aliases
         if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux' && steps.runtime-cache.outputs.cache-hit != 'true'
@@ -1248,22 +1279,28 @@ jobs:
               (context.get("extra_http_headers") or {}).get("Accept-Language") or ""
           )
           primary_language = accept_language.split(",", 1)[0].split(";", 1)[0].strip()
-          valid = (
-              sum(item.startswith("--fingerprint=") for item in args) == 1
-              and "--fingerprint-platform=windows" in args
-              and sum(item.startswith("--window-size=") for item in args) == 1
-              and "viewport" in context
-              and context["viewport"] is None
-              and str(context.get("locale") or "") == "en-US"
-              and bool(context.get("user_agent"))
-              and primary_language == "en-US"
-              and (
-                  not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
-                  or bool(browser.get("proxy"))
+          if os.environ.get("BROWSER_ENGINE", "cloak").strip().lower() == "edge":
+              # Edge keeps its native user agent and fingerprint flags, so the
+              # Cloak manifest completeness rules do not describe this launch.
+              if not context:
+                  raise SystemExit("edge recovery requires a context block")
+          else:
+              valid = (
+                  sum(item.startswith("--fingerprint=") for item in args) == 1
+                  and "--fingerprint-platform=windows" in args
+                  and sum(item.startswith("--window-size=") for item in args) == 1
+                  and "viewport" in context
+                  and context["viewport"] is None
+                  and str(context.get("locale") or "") == "en-US"
+                  and bool(context.get("user_agent"))
+                  and primary_language == "en-US"
+                  and (
+                      not bool((browser.get("recovery_provenance") or {}).get("proxy_was_configured"))
+                      or bool(browser.get("proxy"))
+                  )
               )
-          )
-          if not valid:
-              raise SystemExit("Registration environment manifest is incomplete")
+              if not valid:
+                  raise SystemExit("Registration environment manifest is incomplete")
           private.joinpath("secret.json").write_text(
               json.dumps({"secret_key": os.environ["SERVICE_ABUSE_EXPERIMENT_KEY"]}),
               encoding="utf-8",
@@ -1409,6 +1446,7 @@ jobs:
             test "$actual_protocol_sha256" = 'a6cd0ef7634392c5dd944dcc3ffaeb8ab5156a1c25fb5ac9168e09339743f141'
           fi
           cp "$GITHUB_WORKSPACE/tools/service_abuse_recovery.py" "$runtime/tools/service_abuse_recovery.py"
+          cp "$GITHUB_WORKSPACE/tools/security_email_binding.py" "$runtime/tools/security_email_binding.py"
           cp "$protocol_source" "$runtime/protocol_runtime_probe.py"
           venv_python="$GITHUB_WORKSPACE/$VENV_PYTHON"
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -1432,6 +1470,7 @@ jobs:
               --safe-status-output "$safe" \
               --profile-dir "$RUNNER_TEMP/service-abuse-auto-profile" \
               --browser-config "$private/browser-env.json" \
+              --browser-engine "$BROWSER_ENGINE" \
               --entry-url 'https://outlook.live.com/mail/0/?prompt=select_account' \
               --timeout-seconds 720 \
               --omit-email-output \
