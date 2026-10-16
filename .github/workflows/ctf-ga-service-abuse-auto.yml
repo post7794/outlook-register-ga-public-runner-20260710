@@ -341,7 +341,7 @@ jobs:
       NATURAL_SAME_CHALLENGE_SETTLE_MODE: ${{ inputs.natural_same_challenge_settle_mode || 'early0' }}
       HSPROTECT_MAIN_ASSET_SHA256: ${{ inputs.hsprotect_main_asset_sha256 || 'd666a320f33968a79271b427ddce506bd1aa0c815834dce91ae33d4ec3291f59' }}
       HSPROTECT_MAIN_ASSET_FAMILY_SHA256: "e2fc41e4b0a8a62a0c67de3b4334db80ae5aa9808bbbe3ddc7cccdd320b76bf3"
-      RECOVERY_SOURCE_REF: "d8cb37e53a07ebefa8419d96bbcd2945beb090e6"
+      RECOVERY_SOURCE_REF: "1ad666fa364c096a0c74c32151d7e634102915c1"
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -674,7 +674,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: "d8cb37e53a07ebefa8419d96bbcd2945beb090e6"
+          ref: "1ad666fa364c096a0c74c32151d7e634102915c1"
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
