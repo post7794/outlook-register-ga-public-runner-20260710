@@ -1,0 +1,96 @@
+name: CTF Windows reauth batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_ref:
+        description: "Private source ref (full 40-char SHA or branch)"
+        required: true
+        default: "main"
+      accounts_json:
+        description: 'JSON array of OutlookEmail account ids, e.g. ["8","17","19"]'
+        required: true
+        default: '["8","17","19"]'
+      timeout_minutes:
+        description: "Job timeout minutes"
+        required: true
+        default: "25"
+
+jobs:
+  reauth:
+    runs-on: windows-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        account_id: ${{ fromJSON(inputs.accounts_json) }}
+    env:
+      PYTHONIOENCODING: utf-8
+      SECURITY_MAIL_API_KEY: ${{ secrets.SECURITY_MAIL_API_KEY }}
+      OUTLOOK_EMAIL_BASE_URL: ${{ vars.OUTLOOK_EMAIL_BASE_URL }}
+      OUTLOOK_EMAIL_API_KEY: ${{ secrets.OUTLOOK_EMAIL_API_KEY }}
+      OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64: ${{ secrets.OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64 }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.private_ref }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install patchright cryptography requests
+
+      - name: Materialize writeback config
+        shell: pwsh
+        env:
+          OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64: ${{ secrets.OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64) { throw "writeback config secret missing" }
+          [IO.File]::WriteAllBytes(
+            "$env:RUNNER_TEMP\outlook-email.json",
+            [Convert]::FromBase64String($env:OUTLOOK_EMAIL_WRITEBACK_CONFIG_B64)
+          )
+          "OUTLOOK_EMAIL_WRITEBACK_CONFIG=$env:RUNNER_TEMP\outlook-email.json" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Reauth account ${{ matrix.account_id }}
+        id: reauth
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          python tools\reauth_account.py --account-id ${{ matrix.account_id }} --safe-output reauth-safe.json 2>&1 |
+            Tee-Object -FilePath "reauth-attempt.log"
+          Write-Host "exit=$LASTEXITCODE"
+          "reauth_exit=$LASTEXITCODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Summarize
+        if: always()
+        shell: pwsh
+        run: |
+          "## Reauth account ${{ matrix.account_id }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content reauth-safe.json -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content reauth-attempt.log -ErrorAction SilentlyContinue |
+            Select-String -Pattern "reauth\]|GA_RESULT" |
+            Select-Object -Last 25 |
+            ForEach-Object { $_.Line } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reauth-${{ matrix.account_id }}-${{ github.run_id }}
+          path: |
+            reauth-safe.json
+            reauth-attempt.log
