@@ -152,6 +152,7 @@ jobs:
       GA_COORDINATOR_URL: ${{ vars.GA_COORDINATOR_URL }}
       GA_COORDINATOR_TOKEN: ${{ secrets.GA_COORDINATOR_TOKEN }}
       RECOVERY_SOURCE_REF: "1913a13bbaff040a11516e2e9c2a084d277a24dd"
+      RECOVERY_GROUP_NAME: ${{ vars.SERVICE_ABUSE_RECOVERY_GROUP || '封禁池' }}
     steps:
       - name: Fail closed around active scheduled registration
         id: conflicts
@@ -254,6 +255,7 @@ jobs:
             --coordinator-url "$GA_COORDINATOR_URL" \
             --safe-output "$RUNNER_TEMP/recovery-pool-gate/plan.json" \
             --github-output "$GITHUB_OUTPUT" \
+            --group-name "$RECOVERY_GROUP_NAME" \
             --requested-slots-json "$REQUESTED_SLOTS_JSON" \
             --mode "$PLAN_MODE" \
             --max-candidates "$MAX_CANDIDATES" \
@@ -342,6 +344,7 @@ jobs:
       HSPROTECT_MAIN_ASSET_SHA256: ${{ inputs.hsprotect_main_asset_sha256 || 'd666a320f33968a79271b427ddce506bd1aa0c815834dce91ae33d4ec3291f59' }}
       HSPROTECT_MAIN_ASSET_FAMILY_SHA256: "e2fc41e4b0a8a62a0c67de3b4334db80ae5aa9808bbbe3ddc7cccdd320b76bf3"
       RECOVERY_SOURCE_REF: "b2d0cfb292fe1c1c22cf1024f52cc692b2d0e176"
+      RECOVERY_GROUP_NAME: ${{ vars.SERVICE_ABUSE_RECOVERY_GROUP || '封禁池' }}
     steps:
       - name: Reject GitHub UI re-runs
         if: github.run_attempt != 1
@@ -1363,6 +1366,7 @@ jobs:
             --coordinator-url "$GA_COORDINATOR_URL" \
             --request-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RECOVERY_SLOT}" \
             --run-id "${GITHUB_RUN_ID}-${RECOVERY_SLOT}" \
+            --group-name "$RECOVERY_GROUP_NAME" \
             --fixture-output "$private/fixture.json" \
             --lease-output "$private/lease.json" \
             --safe-output "$safe" \
