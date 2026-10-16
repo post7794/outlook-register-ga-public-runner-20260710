@@ -127,10 +127,6 @@ on:
         description: "Observed raw HSProtect main.min.js SHA-256 retained for stratification"
         required: true
         default: "77aed42430ae5f8c15294950fc69c37fa1ca52cec4c32d50e890e8b80830b502"
-      egress_prefix_denylist:
-        description: "Known-bad GA egress prefixes skipped before an account lease is acquired"
-        required: false
-        default: "4.,13.,20.,40.,52.,68.,74.249."
 concurrency:
   group: service-abuse-auto-recovery
   cancel-in-progress: false
@@ -732,7 +728,7 @@ jobs:
         id: runner_egress
         shell: bash
         env:
-          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist || '4.,13.,20.,40.,52.,68.,74.249.' }}
+          EGRESS_PREFIX_DENYLIST: "4.,13.,20.,40.,52.,68.,74.249."
         run: |
           set -euo pipefail
           ip=$(curl -fsS --max-time 10 https://api.ipify.org || true)
@@ -1110,7 +1106,7 @@ jobs:
         if: steps.runner_egress.outputs.prepare == 'true'
         shell: bash
         env:
-          EGRESS_PREFIX_DENYLIST: ${{ inputs.egress_prefix_denylist || '4.,13.,20.,40.,52.,68.,74.249.' }}
+          EGRESS_PREFIX_DENYLIST: "4.,13.,20.,40.,52.,68.,74.249."
           KNOWN_SUCCESS_EGRESS_SHA16: ${{ secrets.CTF_PROXY_KNOWN_SUCCESS_EGRESS_SHA16 }}
         run: |
           set -euo pipefail
