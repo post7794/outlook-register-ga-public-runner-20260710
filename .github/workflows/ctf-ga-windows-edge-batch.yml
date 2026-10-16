@@ -31,6 +31,7 @@ jobs:
       OUTLOOK_SAME_SESSION_OAUTH: "1"
       OUTLOOK_EMAIL_BASE_URL: ${{ vars.OUTLOOK_EMAIL_BASE_URL }}
       OUTLOOK_EMAIL_API_KEY: ${{ secrets.OUTLOOK_EMAIL_API_KEY }}
+      JOYPROXY_PROXY_URL: ${{ secrets.JOYPROXY_PROXY_URL }}
     steps:
       - name: Checkout private source
         uses: actions/checkout@v4
