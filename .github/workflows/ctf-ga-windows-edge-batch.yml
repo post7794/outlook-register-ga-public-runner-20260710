@@ -1,6 +1,11 @@
 name: CTF Windows real-Edge batch
 
 on:
+  schedule:
+    # Every 3 hours at an off-minute; scheduled runs take the input defaults
+    # (private_ref=main, 20 slots, 25 min). Flow-egress logging is on, so each
+    # run feeds the per-prefix challenge attribution.
+    - cron: "23 */3 * * *"
   workflow_dispatch:
     inputs:
       private_ref:
