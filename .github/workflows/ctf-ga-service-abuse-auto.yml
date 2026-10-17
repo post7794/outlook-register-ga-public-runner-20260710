@@ -962,7 +962,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          xvfb-run -a -s '-screen 0 1920x1080x24'             "${VENV_PYTHON:-$BOOTSTRAP_PYTHON}" -u "$GITHUB_WORKSPACE/tools/probe_egress_score.py"             > "$RUNNER_TEMP/egress-score-probe.log" 2>&1 || true
+          xvfb-run -a -s '-screen 0 1920x1080x24'             "${VENV_PYTHON:-$BOOTSTRAP_PYTHON}" -u "$GITHUB_WORKSPACE/tools/probe_egress_score.py"             2>&1 | tee "$RUNNER_TEMP/egress-score-probe.log" || true
           grep -aoE 'EGRESS_SCORE_VERDICT=[a-z_]+' "$RUNNER_TEMP/egress-score-probe.log" | tail -1 || true
           "${VENV_PYTHON:-python3}" - <<'PY'
           import json, os
