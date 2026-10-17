@@ -778,27 +778,6 @@ jobs:
           print(json.dumps(safe, ensure_ascii=False))
           PY
 
-      - name: Probe egress PX score (record-only)
-        if: steps.runner_egress.outputs.prepare == 'true'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -uo pipefail
-          xvfb-run -a -s '-screen 0 1920x1080x24'             "${VENV_PYTHON:-$BOOTSTRAP_PYTHON}" -u "$GITHUB_WORKSPACE/tools/probe_egress_score.py"             > "$RUNNER_TEMP/egress-score-probe.log" 2>&1 || true
-          grep -aoE 'EGRESS_SCORE_VERDICT=[a-z_]+' "$RUNNER_TEMP/egress-score-probe.log" | tail -1 || true
-          "${VENV_PYTHON:-python3}" - <<'PY'
-          import json, os
-          from pathlib import Path
-          src = Path(os.environ["RUNNER_TEMP"]) / "egress-score-probe.log"
-          verdict = ""
-          if src.exists():
-              for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
-                  if line.startswith("EGRESS_SCORE_VERDICT="):
-                      verdict = line.split("=", 1)[1].strip()
-          path = Path(os.environ["RUNNER_TEMP"]) / "egress-score-safe.json"
-          path.write_text(json.dumps({"egress_score_verdict": verdict}, ensure_ascii=False), encoding="utf-8")
-          PY
-
       - name: Record skipped runner egress
         if: steps.runner_egress.outputs.prepare != 'true'
         shell: bash
@@ -976,6 +955,27 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends microsoft-edge-stable
           /usr/bin/microsoft-edge --version || /usr/bin/microsoft-edge-stable --version
+
+      - name: Probe egress PX score (record-only)
+        if: steps.runner_egress.outputs.prepare == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          xvfb-run -a -s '-screen 0 1920x1080x24'             "${VENV_PYTHON:-$BOOTSTRAP_PYTHON}" -u "$GITHUB_WORKSPACE/tools/probe_egress_score.py"             > "$RUNNER_TEMP/egress-score-probe.log" 2>&1 || true
+          grep -aoE 'EGRESS_SCORE_VERDICT=[a-z_]+' "$RUNNER_TEMP/egress-score-probe.log" | tail -1 || true
+          "${VENV_PYTHON:-python3}" - <<'PY'
+          import json, os
+          from pathlib import Path
+          src = Path(os.environ["RUNNER_TEMP"]) / "egress-score-probe.log"
+          verdict = ""
+          if src.exists():
+              for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
+                  if line.startswith("EGRESS_SCORE_VERDICT="):
+                      verdict = line.split("=", 1)[1].strip()
+          path = Path(os.environ["RUNNER_TEMP"]) / "egress-score-safe.json"
+          path.write_text(json.dumps({"egress_score_verdict": verdict}, ensure_ascii=False), encoding="utf-8")
+          PY
 
       - name: Install registration-compatible Windows font aliases
         if: steps.runner_egress.outputs.prepare == 'true' && runner.os == 'Linux' && steps.runtime-cache.outputs.cache-hit != 'true'
