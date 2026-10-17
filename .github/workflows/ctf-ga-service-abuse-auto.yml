@@ -731,7 +731,7 @@ jobs:
         id: runner_egress
         shell: bash
         env:
-          EGRESS_PREFIX_DENYLIST: "4.,13.,20.,40.,52.,68.,74.249."
+          EGRESS_PREFIX_DENYLIST: ${{ vars.SERVICE_ABUSE_EGRESS_DENYLIST || '4.,13.,20.,40.,52.,68.,74.249.' }}
         run: |
           set -euo pipefail
           ip=$(curl -fsS --max-time 10 https://api.ipify.org || true)
@@ -1109,7 +1109,7 @@ jobs:
         if: steps.runner_egress.outputs.prepare == 'true'
         shell: bash
         env:
-          EGRESS_PREFIX_DENYLIST: "4.,13.,20.,40.,52.,68.,74.249."
+          EGRESS_PREFIX_DENYLIST: ${{ vars.SERVICE_ABUSE_EGRESS_DENYLIST || '4.,13.,20.,40.,52.,68.,74.249.' }}
           KNOWN_SUCCESS_EGRESS_SHA16: ${{ secrets.CTF_PROXY_KNOWN_SUCCESS_EGRESS_SHA16 }}
         run: |
           set -euo pipefail
