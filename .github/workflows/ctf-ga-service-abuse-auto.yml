@@ -778,6 +778,27 @@ jobs:
           print(json.dumps(safe, ensure_ascii=False))
           PY
 
+      - name: Probe egress PX score (record-only)
+        if: steps.runner_egress.outputs.prepare == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          xvfb-run -a -s '-screen 0 1920x1080x24'             "${VENV_PYTHON:-$BOOTSTRAP_PYTHON}" -u "$GITHUB_WORKSPACE/tools/probe_egress_score.py"             > "$RUNNER_TEMP/egress-score-probe.log" 2>&1 || true
+          grep -aoE 'EGRESS_SCORE_VERDICT=[a-z_]+' "$RUNNER_TEMP/egress-score-probe.log" | tail -1 || true
+          "${VENV_PYTHON:-python3}" - <<'PY'
+          import json, os
+          from pathlib import Path
+          src = Path(os.environ["RUNNER_TEMP"]) / "egress-score-probe.log"
+          verdict = ""
+          if src.exists():
+              for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
+                  if line.startswith("EGRESS_SCORE_VERDICT="):
+                      verdict = line.split("=", 1)[1].strip()
+          path = Path(os.environ["RUNNER_TEMP"]) / "egress-score-safe.json"
+          path.write_text(json.dumps({"egress_score_verdict": verdict}, ensure_ascii=False), encoding="utf-8")
+          PY
+
       - name: Record skipped runner egress
         if: steps.runner_egress.outputs.prepare != 'true'
         shell: bash
@@ -1614,6 +1635,7 @@ jobs:
           LEASE_SAFE: ${{ steps.acquire.outputs.safe }}
           RUNTIME_SAFE: ${{ steps.recovery.outputs.safe_status }}
           WRITEBACK_SAFE: ${{ steps.recovery.outputs.writeback_safe }}
+          EGRESS_SCORE_SAFE: ${{ runner.temp }}/egress-score-safe.json
           COMPLETION_SAFE: ${{ steps.complete.outputs.safe }}
           RECOVERY_SOURCE_VERIFIED: ${{ steps.recovery_control.outputs.verified }}
           RECOVERY_SOURCE_COMMIT: ${{ steps.recovery_control.outputs.commit }}
@@ -1649,6 +1671,7 @@ jobs:
 
           lease = load(os.environ.get("LEASE_SAFE", ""))
           runtime = load(os.environ.get("RUNTIME_SAFE", ""))
+          probe_score = load(os.environ.get("EGRESS_SCORE_SAFE", ""))
           writeback = load(os.environ.get("WRITEBACK_SAFE", ""))
           completion = load(os.environ.get("COMPLETION_SAFE", ""))
           verdict = {
@@ -1737,6 +1760,7 @@ jobs:
               "runner_egress_sha16": os.environ.get("RUNNER_EGRESS_SHA16") or None,
               "runner_egress_prefix": os.environ.get("RUNNER_EGRESS_PREFIX") or None,
               "runner_egress_reason": os.environ.get("RUNNER_EGRESS_REASON") or None,
+              "egress_score_verdict": (probe_score.get("egress_score_verdict") or ""),
               "egress_admitted": os.environ.get("EGRESS_ADMITTED") == "true",
               "egress_sha16": os.environ.get("EGRESS_SHA16") or None,
               "egress_prefix": os.environ.get("EGRESS_PREFIX") or None,
