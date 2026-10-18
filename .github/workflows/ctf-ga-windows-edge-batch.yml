@@ -35,7 +35,37 @@ jobs:
       OUTLOOK_EMAIL_API_KEY: ${{ secrets.OUTLOOK_EMAIL_API_KEY }}
       JOYPROXY_PROXY_URL: ${{ secrets.JOYPROXY_PROXY_URL }}
     steps:
+      # Egress gate first: the classic ARIN "MSFT" Azure blocks challenge ~95%
+      # of signups (2026-10-18 100-slot attribution), so skip everything on
+      # them and free the runner for queued jobs. Legacy consumer blocks
+      # (BLS-*) and the RIPE "cloud" family pass and are NOT skipped.
+      - name: Classify egress (skip classic MSFT blocks)
+        id: egress
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $ip = ""
+          try { $ip = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 15).ToString().Trim() } catch {}
+          if (-not $ip) { try { $ip = (Invoke-RestMethod -Uri "https://ifconfig.me/ip" -TimeoutSec 15).ToString().Trim() } catch {} }
+          "EGRESS_IP=$ip" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "egress|EGRESS_IP=$ip" | Out-File -FilePath batch-result.txt -Append
+          if (-not $ip) { "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append; exit 0 }
+          $family = ""
+          try {
+            $rdap = Invoke-RestMethod -Uri "https://rdap.org/ip/$ip" -TimeoutSec 20
+            $family = ([string]$rdap.name).Trim()
+          } catch {}
+          "EGRESS_FAMILY=$family" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($family -ieq "MSFT") {
+            "GA_RESULT=SKIPPED_MSFT" | Out-File -FilePath batch-result.txt -Append
+            "GA_RESULT=SKIPPED_MSFT family=$family ip=$ip" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
       - name: Checkout private source
+        if: steps.egress.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
@@ -43,11 +73,13 @@ jobs:
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
 
       - name: Setup Python
+        if: steps.egress.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install deps
+        if: steps.egress.outputs.skip != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -55,6 +87,7 @@ jobs:
           python -m pip install patchright cryptography requests pproxy
 
       - name: Probe egress IP + PX score (record-only, every slot)
+        if: steps.egress.outputs.skip != 'true'
         shell: pwsh
         continue-on-error: true
         run: |
@@ -67,6 +100,7 @@ jobs:
           "egress|$ipLine|$vdLine" | Out-File -FilePath batch-result.txt -Append
 
       - name: Run probe attempt ${{ matrix.num }}
+        if: steps.egress.outputs.skip != 'true'
         id: probe
         shell: pwsh
         continue-on-error: true
