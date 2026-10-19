@@ -77,7 +77,7 @@ jobs:
               Remove-Item Env:PROBE_PROXY_URL -ErrorAction SilentlyContinue
             }
 
-            $script = if ("${{ inputs.solve }}" -eq "true") { "gh_probe\gh_datadome_solve.py" } else { "gh_probe\gh_signup_probe.py" }
+            $script = if ("${{ inputs.solve }}" -eq "solve") { "gh_probe\gh_datadome_solve.py" } elseif ("${{ inputs.solve }}" -eq "warm") { "gh_probe\gh_warm_session.py" } else { "gh_probe\gh_signup_probe.py" }
             python $script 2>&1 | Tee-Object -FilePath "gh-attempt-$i.log"
             $code = $LASTEXITCODE
             Write-Host "attempt $i exit=$code"
@@ -87,6 +87,8 @@ jobs:
             Get-ChildItem -Filter "gh_dd_*.png" | ForEach-Object { Copy-Item $_.FullName "gh-attempt-$i-$($_.Name)" -Force }
             if (Test-Path gh_dd_final.html) { Copy-Item gh_dd_final.html "gh-attempt-$i-final.html" -Force }
             Get-ChildItem -Filter "gh_dd_*.html" | ForEach-Object { Copy-Item $_.FullName "gh-attempt-$i-$($_.Name)" -Force }
+            Get-ChildItem -Filter "gh_warm_*.png" | ForEach-Object { Copy-Item $_.FullName "gh-attempt-$i-$($_.Name)" -Force }
+            if (Test-Path gh_warm_final.html) { Copy-Item gh_warm_final.html "gh-attempt-$i-final.html" -Force }
             Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
             if ($code -eq 0) { break }
           }
