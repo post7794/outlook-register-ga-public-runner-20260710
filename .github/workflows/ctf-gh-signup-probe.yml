@@ -1,0 +1,127 @@
+name: CTF GitHub signup probe (plain Edge)
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_ref:
+        description: "Private source ref (commit or branch)"
+        required: true
+        default: "main"
+      timeout_minutes:
+        description: "Job timeout minutes"
+        required: true
+        default: "25"
+      runs:
+        description: "Sequential attempts in one job"
+        required: true
+        default: "1"
+      use_proxy:
+        description: "Route Edge through GH_JOY_RESIDENTIAL (residential) instead of direct egress"
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  gh-signup-probe:
+    runs-on: windows-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    env:
+      PYTHONIOENCODING: utf-8
+      GH_JOY_RESIDENTIAL: ${{ secrets.GH_JOY_RESIDENTIAL }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.private_ref }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install websocket-client
+
+      - name: Locate Edge
+        shell: pwsh
+        run: |
+          $paths = @(
+            "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+          )
+          $edge = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $edge) { throw "msedge.exe not found" }
+          Write-Host "EDGE=$edge"
+          (Get-Item $edge).VersionInfo.FileVersion
+          "EDGE_BIN=$edge" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run probe
+        id: probe
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $runs = [int]"${{ inputs.runs }}"
+          $results = @()
+          for ($i = 1; $i -le $runs; $i++) {
+            Write-Host "=== ATTEMPT $i / $runs ==="
+            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 1
+            $profile = "D:\a\edge-profile-$i"
+            if (Test-Path $profile) { Remove-Item -Recurse -Force $profile }
+
+            $proxyArgs = @()
+            if ("${{ inputs.use_proxy }}" -eq "true") {
+              if (-not $env:GH_JOY_RESIDENTIAL) { throw "GH_JOY_RESIDENTIAL secret not set" }
+              # Edge's --proxy-server cannot carry credentials; relay locally with auth
+              Start-Process -FilePath python -ArgumentList "gh_probe\joy_relay.py","18080" -WindowStyle Hidden
+              Start-Sleep -Seconds 3
+              $ok = $false
+              try { Invoke-WebRequest -Uri "http://127.0.0.1:18080/" -TimeoutSec 3 | Out-Null } catch { $ok = $true }
+              if (-not $ok) { Write-Host "relay probe responded (unexpected for plain GET) - continuing" }
+              Write-Host "routing Edge via local relay -> GH_JOY_RESIDENTIAL gate"
+              $proxyArgs = @("--proxy-server=http://127.0.0.1:18080")
+            }
+
+            Start-Process -FilePath "$env:EDGE_BIN" -ArgumentList @("--headless=new","--remote-debugging-port=9222","--no-first-run","--no-default-browser-check","--user-data-dir=$profile","about:blank") + $proxyArgs
+            Start-Sleep -Seconds 8
+            python gh_probe\gh_signup_probe.py 2>&1 | Tee-Object -FilePath "gh-attempt-$i.log"
+            $code = $LASTEXITCODE
+            Write-Host "attempt $i exit=$code"
+            $results += "attempt_$i=$code"
+            if (Test-Path gh_probe_signup.png) { Copy-Item gh_probe_signup.png "gh-attempt-$i.png" -Force }
+            if (Test-Path gh_probe_signup.html) { Copy-Item gh_probe_signup.html "gh-attempt-$i.html" -Force }
+            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
+            if ($code -eq 0) { break }
+          }
+          $summary = $results -join " "
+          "exit_summary=$summary" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "SUMMARY: $summary"
+
+      - name: Summarize result
+        if: always()
+        shell: pwsh
+        run: |
+          "## CTF GitHub signup probe" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "private_ref=${{ inputs.private_ref }} use_proxy=${{ inputs.use_proxy }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "exit_summary=${{ steps.probe.outputs.exit_summary }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "### GH_RESULT / VERDICT lines" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-ChildItem -Filter "gh-attempt-*.log" | ForEach-Object {
+            Get-Content $_.FullName | Select-String -Pattern "GH_RESULT|VERDICT|relay" | ForEach-Object { $_.Line }
+          } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh-signup-probe-${{ github.run_id }}
+          path: |
+            gh-attempt-*.log
+            gh-attempt-*.png
+            gh-attempt-*.html
