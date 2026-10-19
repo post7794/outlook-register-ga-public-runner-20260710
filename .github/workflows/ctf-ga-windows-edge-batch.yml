@@ -1,11 +1,8 @@
 name: CTF Windows real-Edge batch
 
 on:
-  schedule:
-    # Every 2 hours at an off-minute (MSFT-egress slots skip in ~1 min, so a
-    # full batch costs little). Scheduled runs take the input defaults
-    # (private_ref=main, 20 slots, 25 min); egress IP is logged per slot.
-    - cron: "41 */2 * * *"
+  # schedule paused 2026-10-19 for ban-rate observation; re-enable by adding
+  # back: schedule: [{cron: "41 */2 * * *"}]
   workflow_dispatch:
     inputs:
       private_ref:
