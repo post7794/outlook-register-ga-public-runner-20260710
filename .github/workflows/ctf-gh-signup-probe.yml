@@ -46,20 +46,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          python -m pip install websocket-client
-
-      - name: Locate Edge
-        shell: pwsh
-        run: |
-          $paths = @(
-            "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
-          )
-          $edge = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $edge) { throw "msedge.exe not found" }
-          Write-Host "EDGE=$edge"
-          (Get-Item $edge).VersionInfo.FileVersion
-          "EDGE_BIN=$edge" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          python -m pip install patchright websocket-client
 
       - name: Run probe
         id: probe
@@ -73,24 +60,18 @@ jobs:
             Write-Host "=== ATTEMPT $i / $runs ==="
             Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep -Seconds 1
-            $profile = "D:\a\edge-profile-$i"
-            if (Test-Path $profile) { Remove-Item -Recurse -Force $profile }
+            if (Test-Path D:\a\edge-profile-gh) { Remove-Item -Recurse -Force D:\a\edge-profile-gh }
 
-            $proxyArgs = @()
             if ("${{ inputs.use_proxy }}" -eq "true") {
               if (-not $env:GH_JOY_RESIDENTIAL) { throw "GH_JOY_RESIDENTIAL secret not set" }
-              # Edge's --proxy-server cannot carry credentials; relay locally with auth
               Start-Process -FilePath python -ArgumentList "gh_probe\joy_relay.py","18080" -WindowStyle Hidden
               Start-Sleep -Seconds 3
-              $ok = $false
-              try { Invoke-WebRequest -Uri "http://127.0.0.1:18080/" -TimeoutSec 3 | Out-Null } catch { $ok = $true }
-              if (-not $ok) { Write-Host "relay probe responded (unexpected for plain GET) - continuing" }
-              Write-Host "routing Edge via local relay -> GH_JOY_RESIDENTIAL gate"
-              $proxyArgs = @("--proxy-server=http://127.0.0.1:18080")
+              $env:PROBE_PROXY_URL = "http://127.0.0.1:18080"
+              Write-Host "routing Edge via local relay -> joy gate"
+            } else {
+              Remove-Item Env:PROBE_PROXY_URL -ErrorAction SilentlyContinue
             }
 
-            Start-Process -FilePath "$env:EDGE_BIN" -ArgumentList @("--headless=new","--remote-debugging-port=9222","--no-first-run","--no-default-browser-check","--user-data-dir=$profile","about:blank") + $proxyArgs
-            Start-Sleep -Seconds 8
             python gh_probe\gh_signup_probe.py 2>&1 | Tee-Object -FilePath "gh-attempt-$i.log"
             $code = $LASTEXITCODE
             Write-Host "attempt $i exit=$code"
