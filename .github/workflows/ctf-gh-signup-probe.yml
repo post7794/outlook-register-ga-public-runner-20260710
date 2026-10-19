@@ -86,6 +86,7 @@ jobs:
             if (Test-Path gh_probe_signup.html) { Copy-Item gh_probe_signup.html "gh-attempt-$i.html" -Force }
             Get-ChildItem -Filter "gh_dd_*.png" | ForEach-Object { Copy-Item $_.FullName "gh-attempt-$i-$($_.Name)" -Force }
             if (Test-Path gh_dd_final.html) { Copy-Item gh_dd_final.html "gh-attempt-$i-final.html" -Force }
+            Get-ChildItem -Filter "gh_dd_*.html" | ForEach-Object { Copy-Item $_.FullName "gh-attempt-$i-$($_.Name)" -Force }
             Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
             if ($code -eq 0) { break }
           }
@@ -98,11 +99,10 @@ jobs:
         shell: pwsh
         run: |
           "## CTF GitHub signup probe" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "private_ref=${{ inputs.private_ref }} use_proxy=${{ inputs.use_proxy }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "exit_summary=${{ steps.probe.outputs.exit_summary }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "### GH_RESULT / VERDICT lines" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "### GA_RESULT / VERDICT lines" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           Get-ChildItem -Filter "gh-attempt-*.log" | ForEach-Object {
-            Get-Content $_.FullName | Select-String -Pattern "GH_RESULT|VERDICT|relay" | ForEach-Object { $_.Line }
+            Get-Content $_.FullName | Select-String -Pattern "GA_RESULT|VERDICT" | ForEach-Object { $_.Line }
           } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Upload evidence
