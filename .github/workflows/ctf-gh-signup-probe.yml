@@ -21,10 +21,14 @@ on:
         required: true
         default: false
       solve:
-        description: "Attempt DataDome slider solve after detecting the challenge"
-        type: boolean
+        description: "solve = DataDome slider attempt; warm = browse-then-signup session"
+        type: choice
         required: true
-        default: false
+        default: "none"
+        options:
+          - none
+          - solve
+          - warm
 
 jobs:
   gh-signup-probe:
