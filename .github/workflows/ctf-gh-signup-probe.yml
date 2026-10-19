@@ -20,6 +20,11 @@ on:
         type: boolean
         required: true
         default: false
+      solve:
+        description: "Attempt DataDome slider solve after detecting the challenge"
+        type: boolean
+        required: true
+        default: false
 
 jobs:
   gh-signup-probe:
