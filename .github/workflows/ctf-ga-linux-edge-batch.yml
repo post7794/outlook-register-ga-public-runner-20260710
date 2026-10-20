@@ -71,17 +71,37 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Cache pip + Edge deb
+        if: steps.egress.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ${{ runner.temp }}/edge-deb
+          key: linux-edge-deps-v2
+          restore-keys: |
+            linux-edge-deps-
       - name: Install system deps + Edge for Linux
         if: steps.egress.outputs.skip != 'true'
         shell: bash
         run: |
           set -euo pipefail
+          DEB_DIR="${{ runner.temp }}/edge-deb"
+          mkdir -p "$DEB_DIR"
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb xauth fonts-noto-cjk fonts-liberation ca-certificates curl gnupg
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" | sudo tee /etc/apt/sources.list.d/microsoft-edge.list > /dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq microsoft-edge-stable
+          DEB=$(ls "$DEB_DIR"/microsoft-edge-stable_*.deb 2>/dev/null | head -1 || true)
+          if [ -z "${DEB:-}" ]; then
+            ( cd "$DEB_DIR" && apt-get download microsoft-edge-stable )
+            DEB=$(ls "$DEB_DIR"/microsoft-edge-stable_*.deb | head -1)
+          else
+            echo "edge deb cache hit: $(basename "$DEB")"
+          fi
+          echo "installing $(basename "$DEB")"
+          sudo dpkg -i "$DEB" || sudo apt-get install -fy -qq
           # dpkg's postinst usually sets this, but it is racy across jobs: a
           # missing 4755 aborts Chromium's SUID sandbox (TargetClosedError).
           sudo chown root:root /opt/microsoft/msedge/msedge-sandbox || true
