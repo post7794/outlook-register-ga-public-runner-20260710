@@ -115,17 +115,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install patchright cryptography requests pproxy
 
-      - name: Probe egress IP + PX score (record-only, every slot)
-        if: steps.egress.outputs.skip != 'true'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          xvfb-run -a -s "-screen 0 1365x768x24" python tools/probe_egress_score.py 2>&1 | tee egress-score-probe.log
-          grep -E "EGRESS_IP=|EGRESS_SCORE_VERDICT=" egress-score-probe.log | tail -2 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "egress|$(grep -E 'EGRESS_IP=' egress-score-probe.log | tail -1)" >> batch-result.txt
-          echo "egress|$(grep -E 'EGRESS_SCORE_VERDICT=' egress-score-probe.log | tail -1)" >> batch-result.txt
-
       - name: Run probe attempt ${{ matrix.num }}
         if: steps.egress.outputs.skip != 'true'
         id: probe
