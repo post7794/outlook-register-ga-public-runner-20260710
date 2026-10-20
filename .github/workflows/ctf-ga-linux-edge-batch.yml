@@ -82,6 +82,10 @@ jobs:
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" | sudo tee /etc/apt/sources.list.d/microsoft-edge.list > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y -qq microsoft-edge-stable
+          # dpkg's postinst usually sets this, but it is racy across jobs: a
+          # missing 4755 aborts Chromium's SUID sandbox (TargetClosedError).
+          sudo chown root:root /opt/microsoft/msedge/msedge-sandbox || true
+          sudo chmod 4755 /opt/microsoft/msedge/msedge-sandbox || true
           microsoft-edge --version || true
 
       - name: Install Python deps
