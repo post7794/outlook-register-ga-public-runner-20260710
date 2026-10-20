@@ -1,0 +1,133 @@
+name: CTF Linux real-Edge batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_ref:
+        description: "Private source ref (full 40-char SHA or branch)"
+        required: true
+        default: "main"
+      matrix_json:
+        description: "Matrix include rows, e.g. {\"num\":[1,2,3]}"
+        required: true
+        default: "{\"num\":[1,2,3,4]}"
+      timeout_minutes:
+        description: "Job timeout minutes"
+        required: true
+        default: "25"
+
+jobs:
+  edge-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '25') }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix_json || '{"num":[1,2,3,4]}') }}
+    env:
+      PYTHONIOENCODING: utf-8
+      PROBE_FIXED_PASSWORD: ${{ secrets.PROBE_FIXED_PASSWORD }}
+      SECURITY_EMAIL_BINDING: "1"
+      SECURITY_MAIL_API_KEY: ${{ secrets.SECURITY_MAIL_API_KEY }}
+      OUTLOOK_SAME_SESSION_OAUTH: "1"
+      OUTLOOK_EMAIL_BASE_URL: ${{ vars.OUTLOOK_EMAIL_BASE_URL }}
+      OUTLOOK_EMAIL_API_KEY: ${{ secrets.OUTLOOK_EMAIL_API_KEY }}
+      JOYPROXY_PROXY_URL: ${{ secrets.JOYPROXY_PROXY_URL }}
+      EDGE_PROFILE_DIR: ${{ github.workspace }}/edge-profile
+    steps:
+      # Same gate as the Windows batch: classic ARIN "MSFT" blocks challenge
+      # ~95% of signups, so skip them in ~1 minute and free the runner.
+      - name: Classify egress (skip classic MSFT blocks)
+        id: egress
+        shell: bash
+        run: |
+          set +e
+          IP=$(curl -s --max-time 15 https://api.ipify.org)
+          [ -z "$IP" ] && IP=$(curl -s --max-time 15 https://ifconfig.me/ip)
+          IP=$(printf '%s' "$IP" | tr -d '[:space:]')
+          echo "EGRESS_IP=$IP" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "egress|EGRESS_IP=$IP" >> batch-result.txt
+          if [ -z "$IP" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          FAMILY=$(curl -sL --max-time 20 "https://rdap.org/ip/$IP" | python3 -c "import sys,json;print((json.load(sys.stdin).get('name') or '').strip())" 2>/dev/null)
+          echo "EGRESS_FAMILY=$FAMILY" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$FAMILY" = "MSFT" ]; then
+            echo "GA_RESULT=SKIPPED_MSFT" >> batch-result.txt
+            echo "GA_RESULT=SKIPPED_MSFT family=$FAMILY ip=$IP" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout private source
+        if: steps.egress.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ inputs.private_ref }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
+
+      - name: Setup Python
+        if: steps.egress.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system deps + Edge for Linux
+        if: steps.egress.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xauth fonts-noto-cjk fonts-liberation ca-certificates curl gnupg
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" | sudo tee /etc/apt/sources.list.d/microsoft-edge.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq microsoft-edge-stable
+          microsoft-edge --version || true
+
+      - name: Install Python deps
+        if: steps.egress.outputs.skip != 'true'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install patchright cryptography requests pproxy
+
+      - name: Probe egress IP + PX score (record-only, every slot)
+        if: steps.egress.outputs.skip != 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          xvfb-run -a -s "-screen 0 1365x768x24" python tools/probe_egress_score.py 2>&1 | tee egress-score-probe.log
+          grep -E "EGRESS_IP=|EGRESS_SCORE_VERDICT=" egress-score-probe.log | tail -2 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "egress|$(grep -E 'EGRESS_IP=' egress-score-probe.log | tail -1)" >> batch-result.txt
+          echo "egress|$(grep -E 'EGRESS_SCORE_VERDICT=' egress-score-probe.log | tail -1)" >> batch-result.txt
+
+      - name: Run probe attempt ${{ matrix.num }}
+        if: steps.egress.outputs.skip != 'true'
+        id: probe
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          xvfb-run -a -s "-screen 0 1365x768x24" python edge_ga/edge_fill_ga.py 2>&1 | tee edge-attempt.log
+          RES=$(grep -oE "GA_RESULT=[A-Z_]+" edge-attempt.log | tail -1)
+          echo "result=${RES:-NO_RESULT}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.num }}|${RES:-NO_RESULT}" >> batch-result.txt
+
+      - name: Summarize
+        if: always()
+        shell: bash
+        run: |
+          echo "## Linux Edge batch attempt ${{ matrix.num }}" >> "$GITHUB_STEP_SUMMARY"
+          cat batch-result.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          grep -E "GA_RESULT|verify=|ingest=|binding_diag|oauth_diag|challenge|attempt" edge-attempt.log 2>/dev/null | tail -25 >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-edge-batch-${{ matrix.num }}-${{ github.run_id }}
+          path: |
+            batch-result.txt
+            edge-attempt.log
+            egress-score-probe.log
