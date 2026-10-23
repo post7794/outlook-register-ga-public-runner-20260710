@@ -1480,7 +1480,7 @@ jobs:
           fi
           cd "$runtime"
           "$venv_python" "$GITHUB_WORKSPACE/tools/run_process_watchdog.py" \
-            --timeout-seconds 900 \
+            --timeout-seconds 1700 \
             --kill-after-seconds 15 \
             --stdout "$log" \
             --stderr "$err" \
@@ -1493,7 +1493,7 @@ jobs:
               --browser-config "$private/browser-env.json" \
               --browser-engine "$BROWSER_ENGINE" \
               --entry-url 'https://outlook.live.com/mail/0/?prompt=select_account' \
-              --timeout-seconds 720 \
+              --timeout-seconds 1500 \
               --omit-email-output \
               --require-service-abuse-preflight \
               "${human_mode_args[@]}" \
