@@ -343,7 +343,7 @@ jobs:
       NATURAL_SAME_CHALLENGE_SETTLE_MODE: ${{ inputs.natural_same_challenge_settle_mode || 'early0' }}
       HSPROTECT_MAIN_ASSET_SHA256: ${{ inputs.hsprotect_main_asset_sha256 || 'd666a320f33968a79271b427ddce506bd1aa0c815834dce91ae33d4ec3291f59' }}
       HSPROTECT_MAIN_ASSET_FAMILY_SHA256: "e2fc41e4b0a8a62a0c67de3b4334db80ae5aa9808bbbe3ddc7cccdd320b76bf3"
-      RECOVERY_SOURCE_REF: "22a44bc42dce00e8ef5fcbfa29d2fea944e243e0"
+      RECOVERY_SOURCE_REF: "3582411e4301fdc92b8b2515f745a3e33bb90661"
       RECOVERY_GROUP_NAME: ${{ vars.SERVICE_ABUSE_RECOVERY_GROUP || '封禁池' }}
     steps:
       - name: Reject GitHub UI re-runs
@@ -677,7 +677,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.PRIVATE_SOURCE_REPOSITORY }}
-          ref: "22a44bc42dce00e8ef5fcbfa29d2fea944e243e0"
+          ref: "3582411e4301fdc92b8b2515f745a3e33bb90661"
           ssh-key: ${{ secrets.PRIVATE_SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -1905,6 +1905,15 @@ jobs:
             ${{ steps.recovery.outputs.writeback_safe }}
             ${{ steps.recovery.outputs.probe_safe }}
             ${{ steps.complete.outputs.safe }}
+
+      - name: Upload redacted flow diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-flow-diag-${{ github.run_id }}-${{ matrix.slot }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ github.workspace }}/.production-human-runtime/.tmp/service-abuse-diagnostics/*.json
 
       - name: Cleanup private recovery material
         if: always()
